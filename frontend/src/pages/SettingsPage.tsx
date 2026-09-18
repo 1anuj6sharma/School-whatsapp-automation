@@ -5,11 +5,8 @@ import {
   ShieldCheck,
   CheckCircle2,
   AlertCircle,
-  Terminal,
-  Key,
   Globe,
-  Loader2,
-  ExternalLink
+  Loader2
 } from 'lucide-react';
 import { api } from '../services/api';
 import { HealthStatus, TestMessageResult } from '../types';
@@ -20,7 +17,6 @@ interface SettingsPageProps {
 
 export const SettingsPage: React.FC<SettingsPageProps> = ({ showToast }) => {
   const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [loadingHealth, setLoadingHealth] = useState(true);
 
   // Test Message Form
   const [testNumber, setTestNumber] = useState('');
@@ -29,14 +25,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ showToast }) => {
   const [testResult, setTestResult] = useState<TestMessageResult | null>(null);
 
   const fetchHealth = async () => {
-    setLoadingHealth(true);
     try {
       const data = await api.getHealth();
       setHealth(data);
     } catch {
       setHealth(null);
-    } finally {
-      setLoadingHealth(false);
     }
   };
 
@@ -235,11 +228,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ showToast }) => {
               </div>
               <div className="flex justify-between items-center py-2 border-b border-slate-800">
                 <span className="text-slate-400">WhatsApp Phone ID:</span>
-                <span className="font-mono text-emerald-400 font-semibold">1756936935540279</span>
+                <span className="font-mono text-emerald-400 font-semibold">1393372873849630</span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-slate-800">
                 <span className="text-slate-400">Meta API Version:</span>
-                <span className="font-mono text-emerald-300 font-semibold">v26.0</span>
+                <span className="font-mono text-emerald-300 font-semibold">v21.0</span>
               </div>
               <div className="flex justify-between items-center py-2">
                 <span className="text-slate-400">Webhook Endpoint:</span>
@@ -258,7 +251,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ showToast }) => {
               For local testing of <code className="text-sky-300">DELIVERED</code> and <code className="text-sky-300">READ</code> status receipts, create a public HTTPS tunnel with Cloudflare:
             </p>
             <div className="p-3 bg-slate-950 rounded-xl font-mono text-[11px] text-emerald-300 border border-slate-800 flex items-center justify-between">
-              <span>cloudflared tunnel --url http://localhost:8000</span>
+              <span>cloudflared tunnel --url http://localhost:3010</span>
             </div>
             <p className="text-[11px] text-slate-500 leading-snug">
               In Meta Developer Portal &rarr; WhatsApp &rarr; Configuration &rarr; Callback URL, enter:

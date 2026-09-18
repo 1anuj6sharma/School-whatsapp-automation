@@ -102,8 +102,8 @@ You can launch both the FastAPI backend and React frontend together with Docker:
 docker compose up --build
 ```
 
-- **Frontend Dashboard**: `http://localhost:5173` (or `http://localhost:3000`)
-- **Backend Swagger API**: `http://localhost:8000/docs`
+- **Unified Dashboard & API**: `http://localhost:3010`
+- **Backend Swagger API**: `http://localhost:3010/docs`
 
 ---
 
@@ -115,7 +115,7 @@ cd backend
 python -m venv venv
 # Activate virtualenv (Windows: .\venv\Scripts\Activate.ps1 | Linux: source venv/bin/activate)
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 3010
 ```
 
 ### 4.2 Frontend
@@ -126,24 +126,24 @@ npm run dev
 ```
 
 Open your browser to:
-`http://localhost:5173`
+`http://localhost:3010`
 
 ---
 
 ## 5. First End-to-End Test (Class 10-A Broadcast)
 
-1. Open `http://localhost:5173`.
+1. Open `http://localhost:3010`.
 2. Navigate to **"Settings & Test"** on the sidebar:
    - Enter `TEST_RECIPIENT_1` and click **"Send Real WhatsApp Message"**.
    - Verify that your test phone receives Meta's official "Hello World" message.
 3. Navigate to **"Send Message"**:
-   - **Step 1:** Select **Class 10-A** (shows 2 enrolled test students).
+   - **Step 1:** Select **Class 10-A** (shows enrolled test students).
    - **Step 2:** Select template **hello_world** (shows status `ACTIVE`).
-   - **Step 3:** Notice both students (Rahul Sharma & Priya Sharma) are checked.
-   - Click **"Send to 2 Recipients"**.
+   - **Step 3:** Notice students are checked.
+   - Click **"Send to Recipients"**.
 4. In the confirmation dialog, review the summary and click **"Confirm & Send Now"**.
-5. The system concurrently dispatches 2 individual Meta WhatsApp requests and redirects you to the live **Campaign Progress** page.
-6. Check your WhatsApp devices &mdash; both numbers will receive individual messages!
+5. The system concurrently dispatches individual Meta WhatsApp requests and redirects you to the live **Campaign Progress** page.
+6. Check your WhatsApp devices &mdash; all numbers will receive individual messages!
 
 ---
 
@@ -160,13 +160,13 @@ pytest -v
 
 ## 7. Webhook Configuration (Cloudflare Tunnel)
 
-To receive real-time status updates from Meta (`DELIVERED`, `READ` double blue ticks), expose your local FastAPI backend to HTTPS using Cloudflare Tunnel:
+To receive real-time status updates from Meta (`DELIVERED`, `READ` double blue ticks), expose your local application to HTTPS using Cloudflare Tunnel:
 
 ### 7.1 Start Cloudflare Tunnel
 
 ```bash
 # In a new terminal:
-cloudflared tunnel --url http://localhost:8000
+cloudflared tunnel --url http://localhost:3010
 ```
 
 Cloudflare will give you a public URL (e.g. `https://random-subdomain.trycloudflare.com`).

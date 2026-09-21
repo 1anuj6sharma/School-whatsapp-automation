@@ -13,7 +13,7 @@ class WhatsAppService:
         waba_id: Optional[str] = None,
         access_token: Optional[str] = None,
         api_version: Optional[str] = None,
-        timeout: float = 25.0
+        timeout: float = 10.0
     ):
         self.phone_number_id = phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
         self.waba_id = waba_id or settings.WHATSAPP_BUSINESS_ACCOUNT_ID
@@ -151,19 +151,18 @@ class WhatsAppService:
                     }
 
                 except httpx.TimeoutException:
-                    if retry_count < max_retries:
-                        retry_count += 1
-                        logger.warning(
-                            f"[WhatsAppService] Timeout connecting to Meta API for {masked}. Retrying in {backoff_delay}s..."
-                        )
-                        await asyncio.sleep(backoff_delay)
-                        backoff_delay *= 2
-                        continue
-                    logger.error(f"[WhatsAppService] Request timed out after {max_retries + 1} attempts for {masked}")
+                    logger.error(f"[WhatsAppService] Request timed out connecting to Meta API for {masked}")
                     return {
                         "success": False,
                         "error": "Request to Meta WhatsApp API timed out.",
                         "meta_error": {"type": "TimeoutError"}
+                    }
+                except httpx.RequestError as req_err:
+                    logger.error(f"[WhatsAppService] Network/DNS connection error for {masked}: {req_err}")
+                    return {
+                        "success": False,
+                        "error": f"Network/DNS error connecting to Meta: {str(req_err)}",
+                        "meta_error": {"type": "NetworkError", "detail": str(req_err)}
                     }
                 except Exception as ex:
                     logger.error(f"[WhatsAppService] Unexpected error sending message to {masked}: {str(ex)}")

@@ -13,6 +13,11 @@ services:
       - "3010"
     volumes:
       - ./backend/data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     networks:
       - school_net
 

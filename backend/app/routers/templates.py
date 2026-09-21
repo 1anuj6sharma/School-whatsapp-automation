@@ -16,15 +16,15 @@ async def list_templates(db: AsyncSession = Depends(get_db)):
     result = await db.execute(stmt)
     templates = result.scalars().all()
 
-    # If DB has no templates yet, automatically trigger initial sync from Meta
-    if not templates:
+    # Automatically trigger initial sync from Meta to pull all live templates
+    if not templates or len(templates) <= 2:
         try:
             await sync_templates_from_meta(db=db)
             stmt = select(MessageTemplate).order_by(MessageTemplate.name)
             result = await db.execute(stmt)
             templates = result.scalars().all()
         except Exception as ex:
-            logger.warning(f"[Templates] Auto-sync on empty DB skipped: {ex}")
+            logger.warning(f"[Templates] Auto-sync from Meta skipped: {ex}")
 
     return templates
 

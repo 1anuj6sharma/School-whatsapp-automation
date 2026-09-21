@@ -14,6 +14,7 @@ import {
   Edit3,
   RotateCcw,
   Sparkles,
+  Eye,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
@@ -32,8 +33,11 @@ export const SendMessagePage = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState([]);
 
-  // Dynamic Template Variables editing state
+  // Common Template Variables state
   const [templateVariables, setTemplateVariables] = useState({});
+
+  // Active student for Live WhatsApp Preview
+  const [previewStudentId, setPreviewStudentId] = useState(null);
 
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [loadingStudents, setLoadingStudents] = useState(false);
@@ -57,10 +61,13 @@ export const SendMessagePage = ({
           setSelectedClassId(classesData[0].id);
         }
 
-        // Auto-select hello_world if available, or first template
-        const helloWorldTpl = templatesData.find((t) => t.name === 'hello_world' && t.status === 'ACTIVE');
-        if (helloWorldTpl) {
-          setSelectedTemplateId(helloWorldTpl.id);
+        // Auto-select attendance template or hello_world
+        const attTpl = templatesData.find((t) => t.name === 'student_attendance' && (t.status === 'ACTIVE' || t.status === 'APPROVED'));
+        const helloWorldTpl = templatesData.find((t) => t.name === 'hello_world' && (t.status === 'ACTIVE' || t.status === 'APPROVED'));
+        const activeTpl = attTpl || helloWorldTpl || templatesData.find((t) => t.status === 'ACTIVE' || t.status === 'APPROVED');
+        
+        if (activeTpl) {
+          setSelectedTemplateId(activeTpl.id);
         } else if (templatesData.length > 0) {
           setSelectedTemplateId(templatesData[0].id);
         }
@@ -82,6 +89,7 @@ export const SendMessagePage = ({
     if (!selectedClassId) {
       setStudents([]);
       setSelectedStudentIds([]);
+      setPreviewStudentId(null);
       return;
     }
 
@@ -93,6 +101,9 @@ export const SendMessagePage = ({
         // By default, select all opted-in students
         const optedInIds = data.filter((s) => s.whatsapp_opt_in).map((s) => s.id);
         setSelectedStudentIds(optedInIds);
+        if (data.length > 0) {
+          setPreviewStudentId(data[0].id);
+        }
       } catch (err) {
         showToast({
           type: 'error',
@@ -118,21 +129,30 @@ export const SendMessagePage = ({
     return unique.sort((a, b) => Number(a) - Number(b));
   }, [selectedTemplate]);
 
-  // When selected template changes, initialize or preserve template variables
+  // When selected template changes, set convenient defaults for variables
   useEffect(() => {
     if (detectedVariables.length > 0) {
-      setTemplateVariables((prev) => {
-        const newVars = {};
-        detectedVariables.forEach((v) => {
-          // Keep existing value if already entered, else default placeholder
-          newVars[v] = prev[v] || '';
-        });
-        return newVars;
+      const initialVars = {};
+      const tName = selectedTemplate?.name || '';
+
+      detectedVariables.forEach((num) => {
+        if (tName === 'student_attendance') {
+          if (num === '1') initialVars[num] = '{Parent Name}';
+          else if (num === '2') initialVars[num] = '{Student Name}';
+          else if (num === '3') initialVars[num] = 'Present';
+          else if (num === '4') initialVars[num] = 'today';
+          else initialVars[num] = `Value ${num}`;
+        } else {
+          if (num === '1') initialVars[num] = '{Parent Name}';
+          else if (num === '2') initialVars[num] = '{Student Name}';
+          else initialVars[num] = '';
+        }
       });
+      setTemplateVariables(initialVars);
     } else {
       setTemplateVariables({});
     }
-  }, [detectedVariables]);
+  }, [selectedTemplateId, detectedVariables.length]);
 
   const handleVariableChange = (varKey, val) => {
     setTemplateVariables((prev) => ({
@@ -143,13 +163,39 @@ export const SendMessagePage = ({
 
   const handleResetVariables = () => {
     const cleared = {};
-    detectedVariables.forEach((v) => {
-      cleared[v] = '';
+    detectedVariables.forEach((num) => {
+      cleared[num] = '';
     });
     setTemplateVariables(cleared);
   };
 
-  // Generate live preview text by substituting variables in template body
+  // Resolve variable value for preview
+  const resolvePreviewVariable = (varNum, student) => {
+    const val = templateVariables[varNum] || '';
+    if (!val) return `{{${varNum}}}`;
+
+    let resolved = val;
+    const parentName = student?.parent_name || 'Parent';
+    const studentName = student?.student_name || 'Student';
+
+    // Only Name and Parent Name are dynamic
+    resolved = resolved.replaceAll('{Parent Name}', parentName);
+    resolved = resolved.replaceAll('{{Parent Name}}', parentName);
+    resolved = resolved.replaceAll('{parent_name}', parentName);
+    resolved = resolved.replaceAll('{{parent_name}}', parentName);
+
+    resolved = resolved.replaceAll('{Student Name}', studentName);
+    resolved = resolved.replaceAll('{{Student Name}}', studentName);
+    resolved = resolved.replaceAll('{student_name}', studentName);
+    resolved = resolved.replaceAll('{{student_name}}', studentName);
+
+    return resolved;
+  };
+
+  // Selected student for preview
+  const previewStudent = students.find((s) => s.id === previewStudentId) || students[0];
+
+  // Render live preview text
   const renderedPreviewText = useMemo(() => {
     if (!selectedTemplate) return 'No template selected.';
     if (selectedTemplate.name === 'hello_world') {
@@ -158,12 +204,11 @@ export const SendMessagePage = ({
 
     let text = selectedTemplate.body_preview || '';
     detectedVariables.forEach((num) => {
-      const val = templateVariables[num]?.trim();
-      const replacement = val ? val : `{{${num}}}`;
+      const replacement = resolvePreviewVariable(num, previewStudent);
       text = text.replaceAll(`{{${num}}}`, replacement);
     });
     return text;
-  }, [selectedTemplate, detectedVariables, templateVariables]);
+  }, [selectedTemplate, detectedVariables, templateVariables, previewStudent]);
 
   const optedInCount = students.filter((s) => s.whatsapp_opt_in).length;
   const optedOutCount = students.filter((s) => !s.whatsapp_opt_in).length;
@@ -213,7 +258,7 @@ export const SendMessagePage = ({
     setShowConfirmModal(false);
     setIsSending(true);
 
-    // Prepare dynamic parameters array in order [var1, var2, ...]
+    // Prepare template parameters array
     const dynamicParams = detectedVariables.map((v) => {
       const val = templateVariables[v]?.trim();
       return val || `Sample_${v}`;
@@ -230,7 +275,7 @@ export const SendMessagePage = ({
       showToast({
         type: 'success',
         title: 'Broadcast Campaign Initiated!',
-        message: `Dispatched campaign #${campaign.id} to ${campaign.total_recipients} students concurrently.`,
+        message: `Dispatched broadcast to ${campaign.total_recipients} students with dynamic student & parent names.`,
       });
 
       // Redirect immediately to Campaign detail page to view live status
@@ -258,7 +303,7 @@ export const SendMessagePage = ({
           <span>Send WhatsApp Broadcast</span>
         </h2>
         <p className="text-sm text-slate-500 mt-1">
-          Broadcast individual, official WhatsApp messages to parents of selected classes with custom variables.
+          Broadcast official WhatsApp messages with personalized student &amp; parent names and custom common message content.
         </p>
       </div>
 
@@ -339,7 +384,7 @@ export const SendMessagePage = ({
                   <span>3. Class Recipients Checklist</span>
                 </label>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Only opted-in parents receive individual messages.
+                  Click a student to preview their personalized message on the right.
                 </p>
               </div>
 
@@ -363,21 +408,29 @@ export const SendMessagePage = ({
                 {selectedClassId ? 'No students enrolled in this class.' : 'Select a class to preview recipients.'}
               </p>
             ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                 {students.map((student) => {
                   const isOptedIn = student.whatsapp_opt_in;
                   const isSelected = selectedStudentIds.includes(student.id);
+                  const isBeingPreviewed = previewStudentId === student.id;
 
                   return (
                     <div
                       key={student.id}
-                      onClick={() => isOptedIn && handleToggleStudent(student.id)}
-                      className={`flex items-center justify-between p-3 rounded-xl border transition-all ${
+                      onClick={() => {
+                        if (isOptedIn) {
+                          handleToggleStudent(student.id);
+                          setPreviewStudentId(student.id);
+                        }
+                      }}
+                      className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${
                         !isOptedIn
                           ? 'bg-slate-50/50 border-slate-200/50 opacity-60 cursor-not-allowed'
+                          : isBeingPreviewed
+                          ? 'bg-emerald-50/90 border-emerald-400 shadow-xs ring-1 ring-emerald-400/50'
                           : isSelected
-                          ? 'bg-emerald-50/80 border-emerald-300 cursor-pointer shadow-xs'
-                          : 'bg-white border-slate-200 hover:border-slate-300 cursor-pointer'
+                          ? 'bg-emerald-50/50 border-emerald-200 hover:border-emerald-300'
+                          : 'bg-white border-slate-200 hover:border-slate-300'
                       }`}
                     >
                       <div className="flex items-center gap-3">
@@ -391,9 +444,17 @@ export const SendMessagePage = ({
                           )}
                         </div>
                         <div>
-                          <p className="text-sm font-bold text-slate-900">{student.student_name}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-bold text-slate-900">{student.student_name}</p>
+                            {isBeingPreviewed && (
+                              <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.2 rounded flex items-center gap-1">
+                                <Eye className="w-2.5 h-2.5" />
+                                Previewing
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-slate-500">
-                            {student.parent_name ? `Parent: ${student.parent_name}` : 'Parent'} &bull; +{student.whatsapp_number}
+                            Parent: <strong className="text-slate-700">{student.parent_name || 'Parent'}</strong> &bull; +{student.whatsapp_number}
                           </p>
                         </div>
                       </div>
@@ -422,10 +483,15 @@ export const SendMessagePage = ({
           {/* Dynamic Template Variables Box */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
-              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-emerald-600" />
-                <span>Template Variables &amp; Parameters</span>
-              </h4>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-emerald-600" />
+                  <span>Template Variables &amp; Content</span>
+                </h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Use <strong className="text-emerald-700">&#123;Parent Name&#125;</strong> or <strong className="text-emerald-700">&#123;Student Name&#125;</strong> for dynamic names, or type common text for all students.
+                </p>
+              </div>
 
               {detectedVariables.length > 0 && (
                 <button
@@ -447,53 +513,98 @@ export const SendMessagePage = ({
                 </span>
               </div>
             ) : (
-              <div className="space-y-3">
-                <p className="text-xs text-slate-500">
-                  Customize the variables below. The preview and final broadcast messages will use these values. If left blank, default values are used.
-                </p>
+              <div className="space-y-4">
+                {detectedVariables.map((num) => {
+                  const currentValue = templateVariables[num] || '';
+                  const isDynamicName = currentValue === '{Parent Name}' || currentValue === '{Student Name}';
 
-                <div className="space-y-3">
-                  {detectedVariables.map((num) => (
-                    <div key={num} className="space-y-1">
+                  return (
+                    <div key={num} className="p-3 rounded-xl bg-slate-50/70 border border-slate-200 space-y-2">
                       <div className="flex items-center justify-between">
-                        <label className="text-xs font-mono font-bold text-slate-700 flex items-center gap-1.5">
-                          <Edit3 className="w-3 h-3 text-emerald-600" />
-                          <span>Variable &#123;&#123;{num}&#125;&#125; Value:</span>
+                        <label className="text-xs font-mono font-bold text-slate-900 flex items-center gap-1.5">
+                          <Edit3 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Placeholder &#123;&#123;{num}&#125;&#125;:</span>
                         </label>
-                        {templateVariables[num] && (
-                          <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded">
-                            Customized
+                        {isDynamicName ? (
+                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                            Dynamic (Changes per Student)
                           </span>
-                        )}
+                        ) : currentValue ? (
+                          <span className="text-[10px] font-bold text-slate-700 bg-slate-200 px-2 py-0.5 rounded-full">
+                            Common Text (Same for All)
+                          </span>
+                        ) : null}
                       </div>
 
+                      {/* Dynamic Tag Quick Buttons */}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleVariableChange(num, '{Parent Name}')}
+                          className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
+                            currentValue === '{Parent Name}'
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                              : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-300'
+                          }`}
+                        >
+                          + &#123;Parent Name&#125;
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleVariableChange(num, '{Student Name}')}
+                          className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
+                            currentValue === '{Student Name}'
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                              : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-300'
+                          }`}
+                        >
+                          + &#123;Student Name&#125;
+                        </button>
+                      </div>
+
+                      {/* Value Input (Common or Custom) */}
                       <input
                         type="text"
-                        value={templateVariables[num] || ''}
+                        value={currentValue}
                         onChange={(e) => handleVariableChange(num, e.target.value)}
-                        placeholder={`Enter text for {{${num}}} (e.g. Student Name, Date, Event)`}
-                        className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 font-sans shadow-xs transition-all"
+                        placeholder={`e.g. Present, today, or {Student Name}`}
+                        className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 font-sans shadow-xs transition-all"
                       />
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             )}
           </div>
 
-          {/* Realistic WhatsApp Preview */}
+          {/* Realistic WhatsApp Preview with Student Switcher */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <Phone className="w-4 h-4 text-emerald-600" />
                 <span>Live WhatsApp Message Preview</span>
               </h4>
-              <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded border border-slate-200">
-                {selectedTemplate?.name || 'none'}
-              </span>
+
+              {/* Student preview selector */}
+              {students.length > 1 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-500 font-medium">Previewing for:</span>
+                  <select
+                    value={previewStudent?.id || ''}
+                    onChange={(e) => setPreviewStudentId(Number(e.target.value))}
+                    className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-lg px-2 py-1 focus:outline-none"
+                  >
+                    {students.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.student_name} (Parent: {s.parent_name || 'Parent'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
-            {/* Simulated Phone Screen with Realistic WhatsApp light aesthetic */}
+            {/* Simulated Phone Screen with Realistic WhatsApp aesthetic */}
             <div className="rounded-2xl whatsapp-chat-bg border border-slate-300 p-4 shadow-md relative overflow-hidden">
               {/* WhatsApp Chat Header */}
               <div className="flex items-center gap-3 pb-3 mb-3 border-b border-slate-300/80 bg-[#008069] text-white -mx-4 -mt-4 p-3.5 shadow-xs">
@@ -502,12 +613,14 @@ export const SendMessagePage = ({
                 </div>
                 <div>
                   <h5 className="text-xs font-bold text-white">ABC Public School</h5>
-                  <p className="text-[10px] text-emerald-100">Official WhatsApp Business Account</p>
+                  <p className="text-[10px] text-emerald-100">
+                    To: {previewStudent?.parent_name || 'Parent'} (+{previewStudent?.whatsapp_number || '91...'})
+                  </p>
                 </div>
               </div>
 
               {/* Chat Message Bubble */}
-              <div className="whatsapp-bubble-received p-3.5 max-w-[92%] text-slate-900 text-xs shadow-sm space-y-2 border border-slate-200/50">
+              <div className="whatsapp-bubble-received p-3.5 max-w-[94%] text-slate-900 text-xs shadow-sm space-y-2 border border-slate-200/50">
                 {selectedTemplate?.name === 'hello_world' ? (
                   <>
                     <p className="font-bold text-slate-900 text-sm">Hello World</p>
@@ -529,7 +642,7 @@ export const SendMessagePage = ({
 
               <div className="mt-3 text-center">
                 <span className="text-[10px] text-slate-600 font-mono bg-white/85 px-2.5 py-0.5 rounded-full border border-slate-300/70 shadow-xs">
-                  Language: {selectedTemplate?.language || 'en_US'} &bull; Category: {selectedTemplate?.category || 'UTILITY'}
+                  Showing resolved text for: <strong className="text-slate-900">{previewStudent?.student_name || 'Student'}</strong>
                 </span>
               </div>
             </div>
@@ -554,9 +667,9 @@ export const SendMessagePage = ({
               </div>
               {detectedVariables.length > 0 && (
                 <div className="flex justify-between text-slate-600">
-                  <span>Custom Parameters:</span>
+                  <span>Variables:</span>
                   <span className="font-semibold text-slate-800">
-                    {detectedVariables.map((v) => templateVariables[v] ? `[${templateVariables[v]}]` : `[{{${v}}}]`).join(', ')}
+                    {detectedVariables.map((v) => templateVariables[v] || `[{{${v}}}]`).join(', ')}
                   </span>
                 </div>
               )}
@@ -586,7 +699,7 @@ export const SendMessagePage = ({
                 {isSending ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Processing Broadcast...</span>
+                    <span>Personalizing &amp; Sending Broadcast...</span>
                   </>
                 ) : (
                   <>
@@ -620,7 +733,7 @@ export const SendMessagePage = ({
             </p>
             {detectedVariables.length > 0 && (
               <p className="text-slate-600">
-                Parameters: <span className="font-medium text-slate-900">{detectedVariables.map((v) => templateVariables[v] || `Sample_${v}`).join(', ')}</span>
+                Variables: <span className="font-medium text-slate-900">{detectedVariables.map((v) => templateVariables[v] || `{{${v}}}`).join(', ')}</span>
               </p>
             )}
           </div>
@@ -628,7 +741,7 @@ export const SendMessagePage = ({
           <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-2.5 text-xs text-emerald-900">
             <ShieldAlert className="w-4 h-4 text-emerald-700 flex-shrink-0 mt-0.5" />
             <p>
-              Each parent will receive an <strong>individual 1-to-1 WhatsApp message</strong>. This will NOT create a group.
+              Each parent will receive an <strong>individual 1-to-1 WhatsApp message</strong>.
             </p>
           </div>
 

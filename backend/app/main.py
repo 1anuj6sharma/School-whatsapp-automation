@@ -17,13 +17,16 @@ from app.routers import (
     webhooks_router
 )
 
+from app.services.campaign_service import campaign_service
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing School WhatsApp Automation Backend...")
     try:
         await init_db()
         await seed_database()
-        logger.info("Database initialized and auto-seeded from .env successfully.")
+        await campaign_service.cleanup_stale_campaigns()
+        logger.info("Database initialized, auto-seeded, and stale tasks recovered successfully.")
     except Exception as ex:
         logger.error(f"Failed to initialize database on startup: {str(ex)}")
     yield

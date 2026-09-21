@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.config import settings
@@ -21,7 +21,8 @@ class CampaignService:
         class_id: int,
         template_id: int,
         student_ids: Optional[List[int]] = None,
-        dynamic_parameters: Optional[List[str]] = None
+        dynamic_parameters: Optional[List[str]] = None,
+        per_student_parameters: Optional[Dict[Any, List[str]]] = None
     ) -> MessageCampaign:
         # 1. Validate class
         school_class = await db.get(Class, class_id)
@@ -100,6 +101,15 @@ class CampaignService:
         await db.commit()
         await db.refresh(campaign)
 
+        # Convert keys in per_student_parameters to ints if needed
+        clean_per_student = {}
+        if per_student_parameters:
+            for k, v in per_student_parameters.items():
+                try:
+                    clean_per_student[int(k)] = v
+                except (ValueError, TypeError):
+                    clean_per_student[k] = v
+
         # If there are active recipients, trigger background processing
         if total_recipients > 0:
             asyncio.create_task(
@@ -107,85 +117,225 @@ class CampaignService:
                     campaign_id=campaign.id,
                     template_name=template.name,
                     language_code=template.language,
-                    dynamic_parameters=dynamic_parameters
+                    class_name=school_class.name,
+                    dynamic_parameters=dynamic_parameters,
+                    per_student_parameters=clean_per_student
                 )
             )
 
         return campaign
 
     @staticmethod
+    async def cleanup_stale_campaigns():
+        """
+        Runs on startup to recover any campaigns that were left in 'PROCESSING'
+        due to a container restart, server crash, or network abort.
+        """
+        try:
+            async with AsyncSessionLocal() as session:
+                # Find campaigns that are still in PROCESSING state
+                stmt = select(MessageCampaign).where(MessageCampaign.status == "PROCESSING")
+                result = await session.execute(stmt)
+                stale_campaigns = list(result.scalars().all())
+
+                for camp in stale_campaigns:
+                    # Update all orphaned QUEUED message logs to FAILED
+                    stmt_logs = select(MessageLog).where(
+                        MessageLog.campaign_id == camp.id,
+                        MessageLog.status == "QUEUED"
+                    )
+                    res_logs = await session.execute(stmt_logs)
+                    queued_logs = list(res_logs.scalars().all())
+
+                    for log in queued_logs:
+                        log.status = "FAILED"
+                        log.failed_at = datetime.utcnow()
+                        log.error_message = "Broadcast interrupted by server restart or network timeout."
+
+                    # Recalculate campaign totals
+                    stmt_all = select(MessageLog).where(MessageLog.campaign_id == camp.id)
+                    all_logs = list((await session.execute(stmt_all)).scalars().all())
+
+                    success_cnt = sum(1 for l in all_logs if l.status in ("SENT", "DELIVERED", "READ"))
+                    failed_cnt = sum(1 for l in all_logs if l.status in ("FAILED", "SKIPPED"))
+
+                    camp.successful_count = success_cnt
+                    camp.failed_count = failed_cnt
+                    camp.status = "COMPLETED"
+                    camp.completed_at = datetime.utcnow()
+
+                await session.commit()
+                if stale_campaigns:
+                    logger.info(f"[CampaignService] Cleaned up {len(stale_campaigns)} stale/interrupted campaigns from previous session.")
+        except Exception as ex:
+            logger.warning(f"[CampaignService] Stale campaign cleanup encountered error: {ex}")
+
+    @staticmethod
     async def _execute_campaign_batch(
         campaign_id: int,
         template_name: str,
         language_code: str,
-        dynamic_parameters: Optional[List[str]] = None
+        class_name: str,
+        dynamic_parameters: Optional[List[str]] = None,
+        per_student_parameters: Optional[Dict[Any, List[str]]] = None
     ):
         """
-        Executes WhatsApp dispatches concurrently with asyncio.Semaphore.
-        Runs in background task with dedicated DB session.
+        Executes WhatsApp dispatches concurrently with immediate per-message database commits.
+        Ensures real-time UI progress updates and guarantees no hanging in QUEUED state.
         """
-        logger.info(f"[CampaignService] Starting execution of Campaign #{campaign_id}")
+        logger.info(f"[CampaignService] Starting execution of Campaign #{campaign_id} (Template: {template_name})")
         concurrency_limit = max(1, settings.WHATSAPP_MAX_CONCURRENCY)
         semaphore = asyncio.Semaphore(concurrency_limit)
+        lang = language_code or "en_US"
 
-        async with AsyncSessionLocal() as session:
-            # Fetch queued message logs for this campaign
-            stmt = select(MessageLog).where(
-                MessageLog.campaign_id == campaign_id,
-                MessageLog.status == "QUEUED"
-            )
-            result = await session.execute(stmt)
-            logs = list(result.scalars().all())
+        try:
+            # 1. Fetch all queued log IDs and student info
+            log_items = []
+            async with AsyncSessionLocal() as session:
+                stmt = select(MessageLog).where(
+                    MessageLog.campaign_id == campaign_id,
+                    MessageLog.status == "QUEUED"
+                )
+                result = await session.execute(stmt)
+                logs = list(result.scalars().all())
 
-            if not logs:
-                return
+                if not logs:
+                    logger.info(f"[CampaignService] No QUEUED logs found for Campaign #{campaign_id}.")
+                    return
 
-            async def send_single(log: MessageLog):
+                student_ids = [log.student_id for log in logs if log.student_id]
+                stmt_students = select(Student).where(Student.id.in_(student_ids))
+                res_students = await session.execute(stmt_students)
+                students_map = {s.id: s for s in res_students.scalars().all()}
+
+                for log in logs:
+                    st = students_map.get(log.student_id)
+                    log_items.append({
+                        "log_id": log.id,
+                        "recipient_number": log.recipient_number,
+                        "student_id": log.student_id,
+                        "student_name": st.student_name if st else "Student",
+                        "parent_name": (st.parent_name if st else None) or "Parent"
+                    })
+
+            today_str = datetime.now().strftime("%d %b %Y")
+
+            async def process_recipient(item: dict):
                 async with semaphore:
-                    masked = mask_phone_number(log.recipient_number)
+                    log_id = item["log_id"]
+                    recipient = item["recipient_number"]
+                    student_id = item["student_id"]
+                    st_name = item["student_name"]
+                    pr_name = item["parent_name"]
+                    masked = mask_phone_number(recipient)
+
+                    # Determine parameters for this recipient
+                    final_params: Optional[List[str]] = None
+                    if per_student_parameters and (student_id in per_student_parameters):
+                        final_params = per_student_parameters[student_id]
+                    elif dynamic_parameters and len(dynamic_parameters) > 0:
+                        resolved = []
+                        for param in dynamic_parameters:
+                            p_str = str(param)
+                            p_str = p_str.replace("{student_name}", st_name).replace("{{student_name}}", st_name)
+                            p_str = p_str.replace("{Student Name}", st_name).replace("{{Student Name}}", st_name)
+                            p_str = p_str.replace("{parent_name}", pr_name).replace("{{parent_name}}", pr_name)
+                            p_str = p_str.replace("{Parent Name}", pr_name).replace("{{Parent Name}}", pr_name)
+                            p_str = p_str.replace("{phone}", recipient).replace("{{phone}}", recipient)
+                            p_str = p_str.replace("{class_name}", class_name).replace("{{class_name}}", class_name)
+                            p_str = p_str.replace("{Class Name}", class_name).replace("{{Class Name}}", class_name)
+                            p_str = p_str.replace("{date}", today_str).replace("{{date}}", today_str)
+                            p_str = p_str.replace("{Today's Date}", today_str).replace("{{Today's Date}}", today_str)
+                            resolved.append(p_str)
+                        final_params = resolved
+
+                    # Dispatch message via WhatsApp Service
+                    is_success = False
+                    msg_id = None
+                    err_text = None
                     try:
                         resp = await whatsapp_service.send_template_message(
-                            recipient_number=log.recipient_number,
+                            recipient_number=recipient,
                             template_name=template_name,
-                            language_code=language_code,
-                            parameters=dynamic_parameters
+                            language_code=lang,
+                            parameters=final_params
                         )
-
                         if resp.get("success"):
-                            log.status = "SENT"
-                            log.whatsapp_message_id = resp.get("message_id")
-                            log.sent_at = datetime.utcnow()
-                            log.error_message = None
-                            logger.info(f"[Campaign #{campaign_id}] Log #{log.id} -> SENT to {masked}")
+                            is_success = True
+                            msg_id = resp.get("message_id")
+                            logger.info(f"[Campaign #{campaign_id}] Log #{log_id} -> SENT to {masked} (Msg ID: {msg_id})")
                         else:
-                            log.status = "FAILED"
-                            log.failed_at = datetime.utcnow()
-                            log.error_message = resp.get("error", "Unknown delivery failure")
-                            logger.error(f"[Campaign #{campaign_id}] Log #{log.id} -> FAILED for {masked}: {log.error_message}")
-                    except Exception as exc:
-                        log.status = "FAILED"
-                        log.failed_at = datetime.utcnow()
-                        log.error_message = str(exc)
-                        logger.error(f"[Campaign #{campaign_id}] Log #{log.id} exception: {str(exc)}")
+                            is_success = False
+                            err_text = resp.get("error", "Delivery failed")
+                            logger.error(f"[Campaign #{campaign_id}] Log #{log_id} -> FAILED for {masked}: {err_text}")
+                    except Exception as ex:
+                        is_success = False
+                        err_text = str(ex)
+                        logger.error(f"[Campaign #{campaign_id}] Log #{log_id} exception: {err_text}")
 
-            # Run all message sends concurrently within semaphore limit
-            await asyncio.gather(*(send_single(log) for log in logs))
+                    # Immediately commit individual log status into database
+                    try:
+                        async with AsyncSessionLocal() as update_session:
+                            db_log = await update_session.get(MessageLog, log_id)
+                            if db_log:
+                                if is_success:
+                                    db_log.status = "SENT"
+                                    db_log.whatsapp_message_id = msg_id
+                                    db_log.sent_at = datetime.utcnow()
+                                    db_log.error_message = None
+                                else:
+                                    db_log.status = "FAILED"
+                                    db_log.failed_at = datetime.utcnow()
+                                    db_log.error_message = err_text
+                                await update_session.commit()
+                    except Exception as db_ex:
+                        logger.error(f"[Campaign #{campaign_id}] Failed updating log #{log_id} in DB: {db_ex}")
 
-            # Compute totals and update campaign
-            success_count = sum(1 for log in logs if log.status == "SENT")
-            fail_count = sum(1 for log in logs if log.status == "FAILED")
+            # Run all message sends concurrently
+            await asyncio.gather(*(process_recipient(item) for item in log_items))
 
-            campaign = await session.get(MessageCampaign, campaign_id)
-            if campaign:
-                campaign.successful_count = success_count
-                campaign.failed_count = fail_count
-                campaign.status = "COMPLETED"
-                campaign.completed_at = datetime.utcnow()
+            # Finalize campaign counts and completion status
+            async with AsyncSessionLocal() as final_session:
+                stmt = select(MessageLog).where(MessageLog.campaign_id == campaign_id)
+                res = await final_session.execute(stmt)
+                all_logs = list(res.scalars().all())
 
-            await session.commit()
+                success_count = sum(1 for l in all_logs if l.status in ("SENT", "DELIVERED", "READ"))
+                fail_count = sum(1 for l in all_logs if l.status == "FAILED")
+
+                camp = await final_session.get(MessageCampaign, campaign_id)
+                if camp:
+                    camp.successful_count = success_count
+                    camp.failed_count = fail_count
+                    camp.status = "COMPLETED"
+                    camp.completed_at = datetime.utcnow()
+                    await final_session.commit()
+
             logger.info(
-                f"[CampaignService] Campaign #{campaign_id} finished! "
-                f"Total: {len(logs)}, Success: {success_count}, Failed: {fail_count}"
+                f"[CampaignService] Campaign #{campaign_id} fully COMPLETED! "
+                f"Success: {success_count}, Failed: {fail_count}"
             )
+        except Exception as fatal_ex:
+            logger.error(f"[CampaignService] Fatal error in Campaign #{campaign_id}: {fatal_ex}")
+            # Ensure campaign is never stuck in PROCESSING
+            try:
+                async with AsyncSessionLocal() as err_session:
+                    camp = await err_session.get(MessageCampaign, campaign_id)
+                    if camp:
+                        camp.status = "COMPLETED"
+                        camp.completed_at = datetime.utcnow()
+                    # Mark any remaining QUEUED logs as FAILED
+                    stmt_rem = select(MessageLog).where(
+                        MessageLog.campaign_id == campaign_id,
+                        MessageLog.status == "QUEUED"
+                    )
+                    rem_logs = list((await err_session.execute(stmt_rem)).scalars().all())
+                    for l in rem_logs:
+                        l.status = "FAILED"
+                        l.failed_at = datetime.utcnow()
+                        l.error_message = f"Batch processing failed: {str(fatal_ex)}"
+                    await err_session.commit()
+            except Exception as final_err:
+                logger.error(f"[CampaignService] Could not finalize failed campaign: {final_err}")
 
 campaign_service = CampaignService()

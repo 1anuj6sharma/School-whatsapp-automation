@@ -111,16 +111,11 @@ async def handle_whatsapp_events(request: Request, db: AsyncSession = Depends(ge
                 }
                 mapped_status = status_map.get(event, event)
 
-                stmt = select(MessageTemplate).where(
-                    (MessageTemplate.meta_template_id == str(template_id)) |
-                    (MessageTemplate.template_name == template_name)
-                )
+                stmt = select(MessageTemplate).where(MessageTemplate.name == template_name)
                 res = await db.execute(stmt)
                 tpl = res.scalar_one_or_none()
                 if tpl:
                     tpl.status = mapped_status
-                    if str(template_id):
-                        tpl.meta_template_id = str(template_id)
                     await db.commit()
                     logger.info(f"[Webhook] Updated DB template '{template_name}' status to '{mapped_status}'")
 

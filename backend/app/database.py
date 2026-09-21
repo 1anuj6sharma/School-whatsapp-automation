@@ -7,8 +7,12 @@ from app.utils.logger import logger
 class Base(DeclarativeBase):
     pass
 
-def get_normalized_db_url(raw_url: str) -> str:
-    url = raw_url.strip() if raw_url else ""
+def get_normalized_db_url(raw_url):
+    from sqlalchemy.engine import URL
+    if isinstance(raw_url, URL):
+        return raw_url
+
+    url = str(raw_url).strip() if raw_url else ""
     if not url:
         return "sqlite+aiosqlite:///./school_whatsapp.db"
 
@@ -24,26 +28,22 @@ def get_normalized_db_url(raw_url: str) -> str:
 
     return url
 
-db_url = get_normalized_db_url(settings.get_database_url())
-connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
+def create_engine_with_fallback(primary_url):
+    url_str = str(primary_url)
+    connect_args = {"check_same_thread": False} if "sqlite" in url_str else {}
+    try:
+        eng = create_async_engine(primary_url, echo=False, future=True, connect_args=connect_args)
+        logger.info(f"[Database] Engine initialized with target: {url_str.split('@')[-1] if '@' in url_str else url_str}")
+        return eng, primary_url
+    except Exception as ex:
+        logger.warning(f"[Database] Primary engine creation failed for {url_str}: {ex}")
+        # Fallback to local SQLite if absolutely necessary
+        fallback_url = "sqlite+aiosqlite:///./school_whatsapp.db"
+        eng = create_async_engine(fallback_url, echo=False, future=True, connect_args={"check_same_thread": False})
+        return eng, fallback_url
 
-try:
-    engine = create_async_engine(
-        db_url,
-        echo=False,
-        future=True,
-        connect_args=connect_args
-    )
-    logger.info(f"[Database] Engine initialized with URL: {db_url.split('@')[-1] if '@' in db_url else db_url}")
-except Exception as ex:
-    logger.warning(f"[Database] Could not create engine with {db_url} ({ex}). Falling back to local SQLite.")
-    db_url = "sqlite+aiosqlite:///./school_whatsapp.db"
-    engine = create_async_engine(
-        db_url,
-        echo=False,
-        future=True,
-        connect_args={"check_same_thread": False}
-    )
+db_url = get_normalized_db_url(settings.get_database_url())
+engine, db_url = create_engine_with_fallback(db_url)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
@@ -78,7 +78,9 @@ async def init_db():
             logger.info("[Database] All tables checked/created in target database successfully.")
     except Exception as ex:
         logger.warning(f"[Database] Table creation error on configured engine ({ex}). Falling back to persistent local SQLite.")
-        db_url_fallback = "sqlite+aiosqlite:///./school_whatsapp.db"
+        db_url_fallback = settings.get_database_url()
+        if not db_url_fallback.startswith("sqlite"):
+            db_url_fallback = "sqlite+aiosqlite:///./data/school_whatsapp.db"
         engine = create_async_engine(
             db_url_fallback,
             echo=False,

@@ -12,25 +12,23 @@ router = APIRouter(prefix="/api/classes", tags=["Classes"])
 
 @router.get("", response_model=List[ClassResponse])
 async def list_classes(db: AsyncSession = Depends(get_db)):
-    # Query classes with student count
     stmt = (
-        select(Class, func.count(Student.id).label("student_count"))
-        .outerjoin(Student, Class.id == Student.class_id)
-        .group_by(Class.id)
+        select(Class)
+        .options(selectinload(Class.students))
         .order_by(Class.name)
     )
     result = await db.execute(stmt)
-    rows = result.all()
+    classes = result.scalars().all()
 
     response = []
-    for cls, count in rows:
+    for cls in classes:
         resp_item = ClassResponse(
             id=cls.id,
             name=cls.name,
             section=cls.section,
             created_at=cls.created_at,
             updated_at=cls.updated_at,
-            student_count=count
+            student_count=len(cls.students)
         )
         response.append(resp_item)
     return response
@@ -56,24 +54,22 @@ async def create_class(payload: ClassCreate, db: AsyncSession = Depends(get_db))
 @router.get("/{class_id}", response_model=ClassResponse)
 async def get_class(class_id: int, db: AsyncSession = Depends(get_db)):
     stmt = (
-        select(Class, func.count(Student.id).label("student_count"))
-        .outerjoin(Student, Class.id == Student.class_id)
+        select(Class)
+        .options(selectinload(Class.students))
         .where(Class.id == class_id)
-        .group_by(Class.id)
     )
     result = await db.execute(stmt)
-    row = result.first()
-    if not row:
+    cls = result.scalar_one_or_none()
+    if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
-    
-    cls, count = row
+
     return ClassResponse(
         id=cls.id,
         name=cls.name,
         section=cls.section,
         created_at=cls.created_at,
         updated_at=cls.updated_at,
-        student_count=count
+        student_count=len(cls.students)
     )
 
 @router.put("/{class_id}", response_model=ClassResponse)

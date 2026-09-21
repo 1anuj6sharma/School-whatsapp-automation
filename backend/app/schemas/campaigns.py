@@ -7,6 +7,7 @@ class CampaignCreateRequest(BaseModel):
     template_id: int = Field(..., description="Target Template ID")
     student_ids: list[int] | None = Field(default=None, description="Optional specific student IDs within class")
     dynamic_parameters: list[str] | None = Field(default=None, description="Optional template parameters")
+    per_student_parameters: dict[int, list[str]] | None = Field(default=None, description="Optional per-student customized parameters map {student_id: [param1, param2, ...]}")
 
 class CampaignResponse(BaseModel):
     id: int

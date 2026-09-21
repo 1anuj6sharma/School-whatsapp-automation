@@ -18,15 +18,25 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)):
         select(MessageCampaign)
         .options(
             joinedload(MessageCampaign.school_class),
-            joinedload(MessageCampaign.template)
+            joinedload(MessageCampaign.template),
+            selectinload(MessageCampaign.message_logs)
         )
         .order_by(MessageCampaign.created_at.desc())
     )
     result = await db.execute(stmt)
     campaigns = result.scalars().all()
 
+    needs_commit = False
     response = []
     for c in campaigns:
+        # Reconcile status if no logs are queued anymore
+        if c.status == "PROCESSING" and c.message_logs:
+            has_queued = any(l.status == "QUEUED" for l in c.message_logs)
+            if not has_queued:
+                c.status = "COMPLETED"
+                c.completed_at = c.completed_at or datetime.utcnow()
+                needs_commit = True
+
         response.append(
             CampaignResponse(
                 id=c.id,
@@ -44,6 +54,10 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)):
                 completed_at=c.completed_at
             )
         )
+
+    if needs_commit:
+        await db.commit()
+
     return response
 
 @router.post("", response_model=CampaignResponse, status_code=status.HTTP_201_CREATED)
@@ -54,7 +68,8 @@ async def create_campaign(payload: CampaignCreateRequest, db: AsyncSession = Dep
             class_id=payload.class_id,
             template_id=payload.template_id,
             student_ids=payload.student_ids,
-            dynamic_parameters=payload.dynamic_parameters
+            dynamic_parameters=payload.dynamic_parameters,
+            per_student_parameters=payload.per_student_parameters
         )
 
         # Reload with relationships
@@ -104,6 +119,14 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
     campaign = result.scalar_one_or_none()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
+
+    # If all logs are processed or none are queued, ensure campaign is marked COMPLETED
+    if campaign.status == "PROCESSING" and campaign.message_logs:
+        has_queued = any(l.status == "QUEUED" for l in campaign.message_logs)
+        if not has_queued:
+            campaign.status = "COMPLETED"
+            campaign.completed_at = campaign.completed_at or datetime.utcnow()
+            await db.commit()
 
     logs_response = [MessageLogResponse.from_model(log) for log in campaign.message_logs]
 

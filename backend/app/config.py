@@ -42,27 +42,66 @@ class Settings(BaseSettings):
         description="Async Database connection URL for SQL Server / PostgreSQL / SQLite"
     )
 
-    def get_database_url(self) -> str:
-        if self.DATABASE_URL:
-            return self.DATABASE_URL
-        
-        # Build URL dynamically from DB_* individual parameters
-        db_type = self.DB_TYPE.lower()
+    def get_database_url(self):
+        from sqlalchemy.engine import URL
+
+        db_type = (self.DB_TYPE or "").lower().strip()
+
+        # If user explicitly configured MSSQL or DB_TYPE != sqlite, build the MSSQL URL
         if db_type == "mssql":
-            port_part = f":{self.DB_PORT}" if self.DB_PORT else ":1433"
-            user_part = f"{self.DB_USER}:{self.DB_PASSWORD}@" if self.DB_USER else ""
-            host_part = self.DB_HOST or "localhost"
-            db_part = f"/{self.DB_NAME}" if self.DB_NAME else "/SchoolWhatsApp"
-            driver_encoded = self.DB_DRIVER.replace(" ", "+")
-            return f"mssql+aioodbc://{user_part}{host_part}{port_part}{db_part}?driver={driver_encoded}&TrustServerCertificate=yes"
+            host = (self.DB_HOST or "localhost").strip()
+            # If running inside a container, localhost points to the container itself; route to host.docker.internal
+            is_container = os.path.exists("/.dockerenv") or Path("/app").is_dir() or bool(os.environ.get("RUNNING_IN_DOCKER"))
+            if is_container and host in ("localhost", "127.0.0.1"):
+                host = "host.docker.internal"
+
+            port = self.DB_PORT or 1433
+            db_name = self.DB_NAME.strip() if self.DB_NAME else "school whatsapp"
+            driver = self.DB_DRIVER.strip() if self.DB_DRIVER else "ODBC Driver 17 for SQL Server"
+
+            return URL.create(
+                drivername="mssql+aioodbc",
+                username=self.DB_USER.strip() if self.DB_USER else None,
+                password=self.DB_PASSWORD if self.DB_PASSWORD else None,
+                host=host,
+                port=port,
+                database=db_name,
+                query={
+                    "driver": driver,
+                    "TrustServerCertificate": "yes"
+                }
+            )
+
         elif db_type in ("postgres", "postgresql"):
-            port_part = f":{self.DB_PORT}" if self.DB_PORT else ":5432"
-            user_part = f"{self.DB_USER}:{self.DB_PASSWORD}@" if self.DB_USER else "postgres:postgres@"
-            host_part = self.DB_HOST or "localhost"
-            db_part = f"/{self.DB_NAME}" if self.DB_NAME else "/school_whatsapp"
-            return f"postgresql+asyncpg://{user_part}{host_part}{port_part}{db_part}"
-        
-        return "sqlite+aiosqlite:///./school_whatsapp.db"
+            host = (self.DB_HOST or "localhost").strip()
+            is_container = os.path.exists("/.dockerenv") or Path("/app").is_dir() or bool(os.environ.get("RUNNING_IN_DOCKER"))
+            if is_container and host in ("localhost", "127.0.0.1"):
+                host = "host.docker.internal"
+
+            port = self.DB_PORT or 5432
+            db_name = self.DB_NAME.strip() if self.DB_NAME else "school_whatsapp"
+
+            return URL.create(
+                drivername="postgresql+asyncpg",
+                username=self.DB_USER.strip() if self.DB_USER else "postgres",
+                password=self.DB_PASSWORD if self.DB_PASSWORD else "postgres",
+                host=host,
+                port=port,
+                database=db_name
+            )
+
+        # If DATABASE_URL was provided and not overridden by DB_TYPE
+        if self.DATABASE_URL and not str(self.DATABASE_URL).startswith("sqlite"):
+            return self.DATABASE_URL
+
+        # Persistent SQLite storage in mounted volume
+        data_dir = Path("/app/data") if Path("/app/data").is_dir() else BASE_DIR / "data"
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            db_file = data_dir / "school_whatsapp.db"
+            return f"sqlite+aiosqlite:///{db_file.as_posix()}"
+        except Exception:
+            return "sqlite+aiosqlite:///./school_whatsapp.db"
 
     # CORS Settings
     CORS_ORIGINS: list[str] = [

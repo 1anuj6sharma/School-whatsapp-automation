@@ -89,7 +89,7 @@ async def _ensure_database_exists():
             port=settings.DB_PORT or 1433,
             database="master",
             query={
-                "driver": settings.DB_DRIVER.strip() if settings.DB_DRIVER else "ODBC Driver 17 for SQL Server",
+                "driver": settings.resolve_odbc_driver(),
                 "TrustServerCertificate": "yes"
             }
         )
@@ -122,7 +122,7 @@ async def init_db():
     except Exception as ex:
         logger.warning(f"[Database] Table creation error on configured engine ({ex}). Falling back to persistent local SQLite.")
         db_url_fallback = settings.get_database_url()
-        if not db_url_fallback.startswith("sqlite"):
+        if not str(db_url_fallback).startswith("sqlite"):
             db_url_fallback = "sqlite+aiosqlite:///./data/school_whatsapp.db"
         engine = create_async_engine(
             db_url_fallback,

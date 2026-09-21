@@ -42,6 +42,22 @@ class Settings(BaseSettings):
         description="Async Database connection URL for SQL Server / PostgreSQL / SQLite"
     )
 
+    def resolve_odbc_driver(self) -> str:
+        preferred = (self.DB_DRIVER or "").strip()
+        try:
+            import pyodbc
+            available = pyodbc.drivers()
+            if available:
+                if preferred and preferred in available:
+                    return preferred
+                for candidate in ["ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server", "FreeTDS"]:
+                    if candidate in available:
+                        return candidate
+                return available[0]
+        except Exception:
+            pass
+        return preferred or "ODBC Driver 18 for SQL Server"
+
     def get_database_url(self):
         from sqlalchemy.engine import URL
 
@@ -57,7 +73,7 @@ class Settings(BaseSettings):
 
             port = self.DB_PORT or 1433
             db_name = self.DB_NAME.strip() if self.DB_NAME else "SchoolWhatsAppDB"
-            driver = self.DB_DRIVER.strip() if self.DB_DRIVER else "ODBC Driver 17 for SQL Server"
+            driver = self.resolve_odbc_driver()
 
             return URL.create(
                 drivername="mssql+aioodbc",

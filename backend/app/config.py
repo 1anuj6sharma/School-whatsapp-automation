@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     DB_PORT: int | None = Field(default=None, description="Database port (e.g. 1433, 5432)")
     DB_USER: str | None = Field(default=None, description="Database username")
     DB_PASSWORD: str | None = Field(default=None, description="Database password")
-    DB_NAME: str | None = Field(default=None, description="Database name")
+    DB_NAME: str | None = Field(default="SchoolWhatsAppDB", description="Database name")
     DB_DRIVER: str = Field(default="ODBC Driver 17 for SQL Server", description="ODBC Driver name for SQL Server")
 
     DATABASE_URL: str | None = Field(
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
                 host = "host.docker.internal"
 
             port = self.DB_PORT or 1433
-            db_name = self.DB_NAME.strip() if self.DB_NAME else "school whatsapp"
+            db_name = self.DB_NAME.strip() if self.DB_NAME else "SchoolWhatsAppDB"
             driver = self.DB_DRIVER.strip() if self.DB_DRIVER else "ODBC Driver 17 for SQL Server"
 
             return URL.create(

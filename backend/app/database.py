@@ -64,18 +64,61 @@ def _import_all_models():
     from app.models.message_log import MessageLog
     return [Class, Student, MessageTemplate, MessageCampaign, MessageLog]
 
+async def _ensure_database_exists():
+    db_type = (settings.DB_TYPE or "").lower().strip()
+    if db_type == "mssql":
+        import os
+        from pathlib import Path
+        from sqlalchemy.engine import URL
+
+        db_name = settings.DB_NAME.strip() if settings.DB_NAME else "SchoolWhatsAppDB"
+        safe_db_name = "".join(c for c in db_name if c.isalnum() or c in ("_", "-"))
+        if not safe_db_name:
+            safe_db_name = "SchoolWhatsAppDB"
+
+        host = (settings.DB_HOST or "localhost").strip()
+        is_container = os.path.exists("/.dockerenv") or Path("/app").is_dir() or bool(os.environ.get("RUNNING_IN_DOCKER"))
+        if is_container and host in ("localhost", "127.0.0.1"):
+            host = "host.docker.internal"
+
+        master_url = URL.create(
+            drivername="mssql+aioodbc",
+            username=settings.DB_USER.strip() if settings.DB_USER else None,
+            password=settings.DB_PASSWORD if settings.DB_PASSWORD else None,
+            host=host,
+            port=settings.DB_PORT or 1433,
+            database="master",
+            query={
+                "driver": settings.DB_DRIVER.strip() if settings.DB_DRIVER else "ODBC Driver 17 for SQL Server",
+                "TrustServerCertificate": "yes"
+            }
+        )
+        try:
+            master_engine = create_async_engine(master_url, echo=False, isolation_level="AUTOCOMMIT")
+            async with master_engine.connect() as conn:
+                check_and_create = text(
+                    f"IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'{safe_db_name}') "
+                    f"BEGIN CREATE DATABASE [{safe_db_name}]; END"
+                )
+                await conn.execute(check_and_create)
+                logger.info(f"[Database] Confirmed SQL Server database [{safe_db_name}] exists.")
+            await master_engine.dispose()
+        except Exception as e:
+            logger.info(f"[Database] Notice on master check for [{safe_db_name}]: {e}")
+
 async def init_db():
     """
-    Automatically creates all missing tables in the configured database
+    Automatically creates the database (if missing) and all missing tables in the configured database
     (SQL Server, PostgreSQL, SQLite, MySQL) if they do not exist.
     """
     global engine, AsyncSessionLocal, _tables_initialized
     try:
+        await _ensure_database_exists()
         _import_all_models()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             _tables_initialized = True
-            logger.info("[Database] All tables checked/created in target database successfully.")
+            logger.info("[Database] All tables checked/created in SchoolWhatsAppDB successfully.")
     except Exception as ex:
         logger.warning(f"[Database] Table creation error on configured engine ({ex}). Falling back to persistent local SQLite.")
         db_url_fallback = settings.get_database_url()

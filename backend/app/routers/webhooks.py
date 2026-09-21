@@ -5,6 +5,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import get_db
 from app.models.message_log import MessageLog
+from app.models.template import MessageTemplate
 from app.utils.logger import logger
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["Webhooks"])
@@ -91,5 +92,36 @@ async def handle_whatsapp_events(request: Request, db: AsyncSession = Depends(ge
                             )
 
                     await db.commit()
+
+            # Handle template review status updates
+            field = change.get("field")
+            if field == "message_template_status_update":
+                template_id = value.get("message_template_id")
+                template_name = value.get("message_template_name")
+                event = value.get("event", "").upper()  # APPROVED, REJECTED, PAUSED, PENDING
+                reason = value.get("reason")
+                logger.info(f"[Webhook] Template update: name={template_name}, id={template_id}, event={event}, reason={reason}")
+
+                status_map = {
+                    "APPROVED": "ACTIVE",
+                    "REJECTED": "REJECTED",
+                    "PENDING": "PENDING",
+                    "PAUSED": "PAUSED",
+                    "IN_APPEAL": "PENDING",
+                }
+                mapped_status = status_map.get(event, event)
+
+                stmt = select(MessageTemplate).where(
+                    (MessageTemplate.meta_template_id == str(template_id)) |
+                    (MessageTemplate.template_name == template_name)
+                )
+                res = await db.execute(stmt)
+                tpl = res.scalar_one_or_none()
+                if tpl:
+                    tpl.status = mapped_status
+                    if str(template_id):
+                        tpl.meta_template_id = str(template_id)
+                    await db.commit()
+                    logger.info(f"[Webhook] Updated DB template '{template_name}' status to '{mapped_status}'")
 
     return {"status": "ok"}

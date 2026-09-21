@@ -1,6 +1,5 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import StaticPool
 from sqlalchemy import text
 from app.config import settings
 from app.utils.logger import logger
@@ -8,12 +7,24 @@ from app.utils.logger import logger
 class Base(DeclarativeBase):
     pass
 
-# Determine database URL or fallback to in-memory SQLite
-db_url = settings.DATABASE_URL.strip() if settings.DATABASE_URL else ""
-if not db_url or "postgresql" in db_url.lower():
-    # If user has not set up postgres or left empty, use zero-config embedded SQLite
-    db_url = "sqlite+aiosqlite:///./school_whatsapp.db"
+def get_normalized_db_url(raw_url: str) -> str:
+    url = raw_url.strip() if raw_url else ""
+    if not url:
+        return "sqlite+aiosqlite:///./school_whatsapp.db"
 
+    # Convert common sync prefixes to their async driver equivalents if needed
+    if url.startswith("mssql://") or url.startswith("mssql+pyodbc://"):
+        url = url.replace("mssql://", "mssql+aioodbc://", 1).replace("mssql+pyodbc://", "mssql+aioodbc://", 1)
+    elif url.startswith("postgresql://") or url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1).replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif url.startswith("mysql://"):
+        url = url.replace("mysql://", "mysql+aiomysql://", 1)
+    elif url.startswith("sqlite://") and not url.startswith("sqlite+aiosqlite://"):
+        url = url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+
+    return url
+
+db_url = get_normalized_db_url(settings.get_database_url())
 connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
 
 try:
@@ -23,14 +34,15 @@ try:
         future=True,
         connect_args=connect_args
     )
+    logger.info(f"[Database] Engine initialized with URL: {db_url.split('@')[-1] if '@' in db_url else db_url}")
 except Exception as ex:
-    logger.warning(f"[Database] Could not create engine with {db_url} ({ex}). Falling back to in-memory SQLite.")
+    logger.warning(f"[Database] Could not create engine with {db_url} ({ex}). Falling back to local SQLite.")
+    db_url = "sqlite+aiosqlite:///./school_whatsapp.db"
     engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
+        db_url,
         echo=False,
         future=True,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool
+        connect_args={"check_same_thread": False}
     )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -41,26 +53,37 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False
 )
 
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+_tables_initialized = False
+
+def _import_all_models():
+    """Explicitly imports all ORM models so Base.metadata is fully populated."""
+    from app.models.class_model import Class
+    from app.models.student import Student
+    from app.models.template import MessageTemplate
+    from app.models.campaign import MessageCampaign
+    from app.models.message_log import MessageLog
+    return [Class, Student, MessageTemplate, MessageCampaign, MessageLog]
 
 async def init_db():
-    global engine, AsyncSessionLocal
+    """
+    Automatically creates all missing tables in the configured database
+    (SQL Server, PostgreSQL, SQLite, MySQL) if they do not exist.
+    """
+    global engine, AsyncSessionLocal, _tables_initialized
     try:
+        _import_all_models()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            _tables_initialized = True
+            logger.info("[Database] All tables checked/created in target database successfully.")
     except Exception as ex:
-        logger.warning(f"[Database] Initialization error with default URL ({ex}). Switching to persistent in-memory SQLite.")
+        logger.warning(f"[Database] Table creation error on configured engine ({ex}). Falling back to persistent local SQLite.")
+        db_url_fallback = "sqlite+aiosqlite:///./school_whatsapp.db"
         engine = create_async_engine(
-            "sqlite+aiosqlite:///:memory:",
+            db_url_fallback,
             echo=False,
             future=True,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool
+            connect_args={"check_same_thread": False}
         )
         AsyncSessionLocal = async_sessionmaker(
             bind=engine,
@@ -69,6 +92,51 @@ async def init_db():
             autocommit=False,
             autoflush=False
         )
+        _import_all_models()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            _tables_initialized = True
+            logger.info("[Database] Fallback SQLite tables created successfully.")
 
+async def get_db():
+    """
+    FastAPI dependency yielding an async database session.
+    Guarantees that tables exist before running queries or inserts.
+    """
+    global _tables_initialized
+    if not _tables_initialized:
+        await init_db()
+
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+async def get_db_status_info() -> dict:
+    dialect_name = engine.dialect.name.upper()
+    if "MSSQL" in dialect_name:
+        friendly_name = "Microsoft SQL Server"
+    elif "POSTGRES" in dialect_name:
+        friendly_name = "PostgreSQL"
+    elif "MYSQL" in dialect_name:
+        friendly_name = "MySQL"
+    elif "SQLITE" in dialect_name:
+        friendly_name = "SQLite (Local DB)"
+    else:
+        friendly_name = dialect_name
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        return {
+            "status": "connected",
+            "dialect": friendly_name,
+            "engine": engine.dialect.name
+        }
+    except Exception as ex:
+        return {
+            "status": "error",
+            "dialect": friendly_name,
+            "error": str(ex)
+        }

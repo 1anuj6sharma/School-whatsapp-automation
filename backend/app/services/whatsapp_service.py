@@ -1,4 +1,5 @@
 import asyncio
+import re
 import httpx
 from typing import Any, Dict, List, Optional
 from app.config import settings
@@ -9,11 +10,13 @@ class WhatsAppService:
     def __init__(
         self,
         phone_number_id: Optional[str] = None,
+        waba_id: Optional[str] = None,
         access_token: Optional[str] = None,
         api_version: Optional[str] = None,
-        timeout: float = 20.0
+        timeout: float = 25.0
     ):
         self.phone_number_id = phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
+        self.waba_id = waba_id or settings.WHATSAPP_BUSINESS_ACCOUNT_ID
         self.access_token = access_token or settings.WHATSAPP_ACCESS_TOKEN
         self.api_version = api_version or settings.WHATSAPP_API_VERSION
         self.timeout = timeout
@@ -25,6 +28,9 @@ class WhatsAppService:
         if not self.access_token:
             return False, "WHATSAPP_ACCESS_TOKEN is not configured in environment."
         return True, ""
+
+    def get_waba_id(self) -> str:
+        return self.waba_id or "1086203377344807"
 
     async def send_template_message(
         self,
@@ -172,5 +178,157 @@ class WhatsAppService:
             "error": "Failed after maximum retries.",
             "meta_error": {"type": "MaxRetriesExceeded"}
         }
+
+    async def fetch_templates_from_meta(self) -> List[Dict[str, Any]]:
+        """
+        Fetches all message templates directly from Meta WhatsApp Business Account (WABA).
+        Endpoint: GET https://graph.facebook.com/{version}/{WABA_ID}/message_templates
+        """
+        waba_id = self.get_waba_id()
+        url = f"https://graph.facebook.com/{self.api_version}/{waba_id}/message_templates?limit=100"
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                logger.info(f"[WhatsAppService] Fetching templates from Meta WABA: {waba_id}")
+                response = await client.get(url, headers=headers)
+                data = response.json()
+
+                if response.status_code not in (200, 201):
+                    err_msg = data.get("error", {}).get("message", f"HTTP {response.status_code}")
+                    logger.error(f"[WhatsAppService] Failed to fetch templates from Meta: {err_msg}")
+                    raise RuntimeError(f"Meta API Error: {err_msg}")
+
+                raw_templates = data.get("data", [])
+                parsed_templates = []
+
+                for item in raw_templates:
+                    name = item.get("name", "")
+                    category = item.get("category", "UTILITY")
+                    language = item.get("language", "en_US")
+                    meta_status = item.get("status", "PENDING").upper()
+                    
+                    # Normalize Meta status (APPROVED -> ACTIVE, PENDING -> PENDING, REJECTED -> REJECTED)
+                    status = "ACTIVE" if meta_status == "APPROVED" else meta_status
+                    
+                    components = item.get("components", [])
+                    body_text = ""
+                    for comp in components:
+                        if comp.get("type") == "BODY":
+                            body_text = comp.get("text", "")
+                            break
+
+                    parsed_templates.append({
+                        "name": name,
+                        "category": category,
+                        "language": language,
+                        "status": status,
+                        "raw_status": meta_status,
+                        "body_preview": body_text or f"Template '{name}' from Meta WhatsApp Manager.",
+                        "description": f"Meta {category.title()} Template ({language})",
+                        "meta_id": item.get("id")
+                    })
+
+                logger.info(f"[WhatsAppService] Successfully fetched {len(parsed_templates)} templates from Meta.")
+                return parsed_templates
+            except Exception as ex:
+                logger.error(f"[WhatsAppService] Error querying Meta templates: {str(ex)}")
+                raise
+
+    async def create_template_on_meta(
+        self,
+        name: str,
+        category: str,
+        language: str,
+        body_text: str,
+        sample_values: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Submits a new message template directly to Meta WhatsApp Business Account for review.
+        Endpoint: POST https://graph.facebook.com/{version}/{WABA_ID}/message_templates
+        """
+        waba_id = self.get_waba_id()
+        url = f"https://graph.facebook.com/{self.api_version}/{waba_id}/message_templates"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+
+        # Clean name: lowercase alphanumeric and underscores only
+        clean_name = re.sub(r"[^a-z0-9_]", "_", name.lower().strip())
+
+        # Build components
+        body_component: Dict[str, Any] = {
+            "type": "BODY",
+            "text": body_text.strip()
+        }
+
+        # Check for placeholders {{1}}, {{2}} in text
+        placeholders = re.findall(r"\{\{(\d+)\}\}", body_text)
+        if placeholders:
+            # Meta requires sample values for each placeholder
+            if not sample_values or len(sample_values) < len(placeholders):
+                # Provide reasonable default sample values if none given
+                sample_values = [f"Sample_{i}" for i in range(1, len(placeholders) + 1)]
+            body_component["example"] = {
+                "body_text": [sample_values]
+            }
+
+        payload = {
+            "name": clean_name,
+            "category": category.upper(),
+            "language": language,
+            "components": [body_component]
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                logger.info(f"[WhatsAppService] Creating template '{clean_name}' on Meta WABA: {waba_id}")
+                response = await client.post(url, headers=headers, json=payload)
+                data = response.json()
+
+                if response.status_code not in (200, 201):
+                    error_data = data.get("error", {})
+                    err_msg = error_data.get("message") or error_data.get("error_user_msg") or f"Meta error {response.status_code}"
+                    logger.error(f"[WhatsAppService] Meta rejected template creation: {err_msg}")
+                    raise ValueError(err_msg)
+
+                logger.info(f"[WhatsAppService] Template '{clean_name}' created on Meta successfully: ID {data.get('id')}")
+                return {
+                    "meta_id": data.get("id"),
+                    "name": clean_name,
+                    "status": data.get("status", "PENDING").upper(),
+                    "category": category.upper(),
+                    "language": language,
+                    "body_preview": body_text.strip()
+                }
+            except ValueError:
+                raise
+            except Exception as ex:
+                logger.error(f"[WhatsAppService] Exception creating template on Meta: {str(ex)}")
+                raise RuntimeError(f"Failed to communicate with Meta API: {str(ex)}")
+
+    async def delete_template_on_meta(self, template_name: str) -> bool:
+        """
+        Deletes a template from Meta WhatsApp Business Account.
+        Endpoint: DELETE https://graph.facebook.com/{version}/{WABA_ID}/message_templates?name={template_name}
+        """
+        waba_id = self.get_waba_id()
+        url = f"https://graph.facebook.com/{self.api_version}/{waba_id}/message_templates"
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        params = {"name": template_name}
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                response = await client.delete(url, headers=headers, params=params)
+                data = response.json()
+                if response.status_code in (200, 201) and data.get("success"):
+                    logger.info(f"[WhatsAppService] Template '{template_name}' deleted from Meta.")
+                    return True
+                logger.warning(f"[WhatsAppService] Could not delete '{template_name}' from Meta: {data}")
+                return False
+            except Exception as ex:
+                logger.error(f"[WhatsAppService] Error deleting template from Meta: {str(ex)}")
+                return False
 
 whatsapp_service = WhatsAppService()

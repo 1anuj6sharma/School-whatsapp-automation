@@ -90,7 +90,10 @@ export function App() {
             />
           )}
           {activeTab === 'templates' && (
-            <TemplatesPage onNavigateToSend={() => setActiveTab('send-message')} />
+            <TemplatesPage
+              onNavigateToSend={() => setActiveTab('send-message')}
+              showToast={addToast}
+            />
           )}
           {activeTab === 'campaigns' && (
             <CampaignsPage

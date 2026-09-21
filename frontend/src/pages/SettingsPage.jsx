@@ -6,12 +6,16 @@ import {
   CheckCircle2,
   AlertCircle,
   Globe,
+  Database,
   Loader2,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { api } from '../services/api';
 
 export const SettingsPage = ({ showToast }) => {
   const [health, setHealth] = useState(null);
+  const [copiedKey, setCopiedKey] = useState('');
 
   // Test Message Form
   const [testNumber, setTestNumber] = useState('');
@@ -31,6 +35,13 @@ export const SettingsPage = ({ showToast }) => {
   useEffect(() => {
     fetchHealth();
   }, []);
+
+  const handleCopy = (text, key) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    showToast({ type: 'info', title: 'Copied to Clipboard' });
+    setTimeout(() => setCopiedKey(''), 2500);
+  };
 
   const handleSendTestMessage = async (e) => {
     e.preventDefault();
@@ -87,7 +98,7 @@ export const SettingsPage = ({ showToast }) => {
           <span>System Settings &amp; WhatsApp Diagnostics</span>
         </h2>
         <p className="text-sm text-slate-500 mt-1">
-          Verify Meta Cloud API connectivity, test direct message routing, and inspect webhook configuration.
+          Verify Meta Cloud API connectivity, database status, test direct message routing, and inspect SQL Server configuration.
         </p>
       </div>
 
@@ -199,26 +210,27 @@ export const SettingsPage = ({ showToast }) => {
           </div>
         </div>
 
-        {/* Right Column: System Diagnostics & Webhook Guide */}
+        {/* Right Column: Database Health & SQL Server Guide */}
         <div className="md:col-span-6 space-y-6">
           {/* Health Card */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
             <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-emerald-600" />
-              <span>System &amp; Database Health</span>
+              <Database className="w-5 h-5 text-emerald-600" />
+              <span>Database &amp; API Connectivity</span>
             </h3>
 
             <div className="space-y-3 text-xs">
               <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                <span className="text-slate-500">Backend API Status:</span>
-                <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                  {health?.status === 'ok' ? 'Online (FastAPI)' : 'Checking...'}
+                <span className="text-slate-500">Database Engine / Dialect:</span>
+                <span className="font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>{health?.db_dialect || health?.database || 'Connected'}</span>
                 </span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                <span className="text-slate-500">Database Connection:</span>
-                <span className="font-semibold text-slate-900">
-                  {health?.database || 'Connected'}
+                <span className="text-slate-500">Backend API Status:</span>
+                <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  {health?.status === 'ok' ? 'Online (FastAPI)' : 'Checking...'}
                 </span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-slate-100">
@@ -231,27 +243,43 @@ export const SettingsPage = ({ showToast }) => {
               </div>
               <div className="flex justify-between items-center py-2">
                 <span className="text-slate-500">Webhook Endpoint:</span>
-                <span className="font-mono text-sky-700 font-semibold bg-sky-50 px-2 py-0.5 rounded border border-sky-200">/webhooks/whatsapp</span>
+                <span className="font-mono text-sky-700 font-semibold bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                  /webhooks/whatsapp
+                </span>
               </div>
             </div>
           </div>
 
-          {/* Webhook & Tunnel Guide */}
+          {/* SQL Server Configuration Guide */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-3 text-xs text-slate-700">
             <h4 className="font-bold text-slate-900 flex items-center gap-2">
-              <Globe className="w-4 h-4 text-sky-600" />
-              <span>Configuring Meta Delivery Webhooks</span>
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              <span>SQL Server Connection String Setup</span>
             </h4>
             <p className="leading-relaxed text-slate-600">
-              For local testing of <code className="text-sky-700 font-semibold bg-sky-50 px-1 py-0.5 rounded">DELIVERED</code> and <code className="text-sky-700 font-semibold bg-sky-50 px-1 py-0.5 rounded">READ</code> status receipts, create a public HTTPS tunnel with Cloudflare:
+              To point your app to Microsoft SQL Server, set <code className="font-mono font-bold text-slate-800">DATABASE_URL</code> in your <code className="font-mono font-bold text-slate-800">.env</code> file:
             </p>
-            <div className="p-3 bg-slate-900 rounded-xl font-mono text-[11px] text-emerald-400 border border-slate-800 flex items-center justify-between">
-              <span>cloudflared tunnel --url http://localhost:3010</span>
+
+            <div className="space-y-2">
+              <div className="p-3 bg-slate-900 rounded-xl font-mono text-[11px] text-emerald-300 flex items-center justify-between gap-2 overflow-x-auto">
+                <span className="truncate">DATABASE_URL=mssql+aioodbc://sa:Password123@localhost:1433/SchoolWhatsApp?driver=ODBC+Driver+17+for+SQL+Server&amp;TrustServerCertificate=yes</span>
+                <button
+                  onClick={() =>
+                    handleCopy(
+                      'DATABASE_URL=mssql+aioodbc://sa:Password123@localhost:1433/SchoolWhatsApp?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes',
+                      'odbc'
+                    )
+                  }
+                  className="p-1 rounded bg-slate-800 text-slate-300 hover:text-white flex-shrink-0"
+                  title="Copy"
+                >
+                  {copiedKey === 'odbc' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
             </div>
+
             <p className="text-[11px] text-slate-500 leading-snug">
-              In Meta Developer Portal &rarr; WhatsApp &rarr; Configuration &rarr; Callback URL, enter:
-              <br />
-              <code className="text-slate-700 font-semibold">https://your-tunnel.trycloudflare.com/webhooks/whatsapp</code>
+              All tables (<code className="text-slate-700 font-semibold">classes</code>, <code className="text-slate-700 font-semibold">students</code>, <code className="text-slate-700 font-semibold">templates</code>, <code className="text-slate-700 font-semibold">message_campaigns</code>, <code className="text-slate-700 font-semibold">message_logs</code>) are automatically generated on startup.
             </p>
           </div>
         </div>

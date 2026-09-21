@@ -1,47 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Settings,
   Send,
-  ShieldCheck,
   CheckCircle2,
   AlertCircle,
-  Globe,
-  Database,
   Loader2,
-  Copy,
-  Check,
 } from 'lucide-react';
 import { api } from '../services/api';
 
 export const SettingsPage = ({ showToast }) => {
-  const [health, setHealth] = useState(null);
-  const [copiedKey, setCopiedKey] = useState('');
-
   // Test Message Form
   const [testNumber, setTestNumber] = useState('');
   const [testTemplate, setTestTemplate] = useState('hello_world');
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [testResult, setTestResult] = useState(null);
-
-  const fetchHealth = async () => {
-    try {
-      const data = await api.getHealth();
-      setHealth(data);
-    } catch {
-      setHealth(null);
-    }
-  };
-
-  useEffect(() => {
-    fetchHealth();
-  }, []);
-
-  const handleCopy = (text, key) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    showToast({ type: 'info', title: 'Copied to Clipboard' });
-    setTimeout(() => setCopiedKey(''), 2500);
-  };
 
   const handleSendTestMessage = async (e) => {
     e.preventDefault();
@@ -90,7 +62,7 @@ export const SettingsPage = ({ showToast }) => {
   };
 
   return (
-    <div className="space-y-8 animate-fade-in max-w-5xl mx-auto pb-12">
+    <div className="space-y-8 animate-fade-in max-w-2xl mx-auto pb-12">
       {/* Header */}
       <div className="border-b border-slate-200 pb-4">
         <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
@@ -98,192 +70,115 @@ export const SettingsPage = ({ showToast }) => {
           <span>System Settings &amp; WhatsApp Diagnostics</span>
         </h2>
         <p className="text-sm text-slate-500 mt-1">
-          Verify Meta Cloud API connectivity, database status, test direct message routing, and inspect SQL Server configuration.
+          Verify Meta Cloud API connectivity and test direct message routing.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-        {/* Left Column: Direct Test Dispatcher */}
-        <div className="md:col-span-6 space-y-6">
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-5">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
-                <Send className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-900 text-base">Direct Meta API Test</h3>
-                <p className="text-xs text-slate-500">
-                  Sends an immediate <span className="font-mono text-emerald-700 font-semibold">hello_world</span> message to verify credentials.
-                </p>
-              </div>
+      {/* Direct Test Dispatcher */}
+      <div className="bg-white p-7 rounded-2xl border border-slate-200 shadow-xs space-y-6">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
+            <Send className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="font-bold text-slate-900 text-base">Direct Meta API Test</h3>
+            <p className="text-xs text-slate-500">
+              Sends an immediate <span className="font-mono text-emerald-700 font-semibold">hello_world</span> message to verify credentials.
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSendTestMessage} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Recipient WhatsApp Number *
+            </label>
+            <input
+              type="text"
+              required
+              value={testNumber}
+              onChange={(e) => setTestNumber(e.target.value)}
+              placeholder="e.g. 919876543210 (without '+')"
+              className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Enter your verified Meta test recipient phone number.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Template Name
+            </label>
+            <input
+              type="text"
+              value={testTemplate}
+              onChange={(e) => setTestTemplate(e.target.value)}
+              className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={isSendingTest}
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-100 disabled:text-slate-400 text-white rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer"
+          >
+            {isSendingTest ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Connecting to Meta API...</span>
+              </>
+            ) : (
+              <>
+                <Send className="w-4 h-4" />
+                <span>Send Real WhatsApp Message</span>
+              </>
+            )}
+          </button>
+        </form>
+
+        {/* Test Result Box */}
+        {testResult && (
+          <div
+            className={`p-4 rounded-xl border text-xs space-y-2 animate-fade-in ${
+              testResult.success
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-rose-50 border-rose-200 text-rose-900'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-bold text-sm">
+              {testResult.success ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span className="text-emerald-800">Message Delivered via Meta!</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-4 h-4 text-rose-600" />
+                  <span className="text-rose-800">Meta Delivery Failed</span>
+                </>
+              )}
             </div>
 
-            <form onSubmit={handleSendTestMessage} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Recipient WhatsApp Number *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={testNumber}
-                  onChange={(e) => setTestNumber(e.target.value)}
-                  placeholder="e.g. 919876543210 (without '+')"
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Enter your verified Meta test recipient phone number.
-                </p>
+            {testResult.success ? (
+              <div className="space-y-1 font-mono text-[11px] pt-1 text-emerald-800">
+                <p>WhatsApp Message ID: {testResult.message_id}</p>
+                <p>Recipient: {testResult.recipient}</p>
               </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Template Name
-                </label>
-                <input
-                  type="text"
-                  value={testTemplate}
-                  onChange={(e) => setTestTemplate(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSendingTest}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-100 disabled:text-slate-400 text-white rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-2 transition-all active:scale-95"
-              >
-                {isSendingTest ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Connecting to Meta API...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    <span>Send Real WhatsApp Message</span>
-                  </>
-                )}
-              </button>
-            </form>
-
-            {/* Test Result Box */}
-            {testResult && (
-              <div
-                className={`p-4 rounded-xl border text-xs space-y-2 animate-fade-in ${
-                  testResult.success
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                    : 'bg-rose-50 border-rose-200 text-rose-900'
-                }`}
-              >
-                <div className="flex items-center gap-2 font-bold text-sm">
-                  {testResult.success ? (
-                    <>
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      <span className="text-emerald-800">Message Delivered via Meta!</span>
-                    </>
-                  ) : (
-                    <>
-                      <AlertCircle className="w-4 h-4 text-rose-600" />
-                      <span className="text-rose-800">Meta Delivery Failed</span>
-                    </>
-                  )}
-                </div>
-
-                {testResult.success ? (
-                  <div className="space-y-1 font-mono text-[11px] pt-1 text-emerald-800">
-                    <p>WhatsApp Message ID: {testResult.message_id}</p>
-                    <p>Recipient: {testResult.recipient}</p>
-                  </div>
-                ) : (
-                  <div className="space-y-1 text-[11px] pt-1">
-                    <p className="font-semibold text-rose-800">{testResult.error}</p>
-                    {testResult.meta_error && (
-                      <pre className="p-2 bg-rose-100/70 rounded-lg overflow-x-auto text-[10px] text-rose-900 font-mono mt-2 border border-rose-200">
-                        {JSON.stringify(testResult.meta_error, null, 2)}
-                      </pre>
-                    )}
-                  </div>
+            ) : (
+              <div className="space-y-1 text-[11px] pt-1">
+                <p className="font-semibold text-rose-800">{testResult.error}</p>
+                {testResult.meta_error && (
+                  <pre className="p-2 bg-rose-100/70 rounded-lg overflow-x-auto text-[10px] text-rose-900 font-mono mt-2 border border-rose-200">
+                    {JSON.stringify(testResult.meta_error, null, 2)}
+                  </pre>
                 )}
               </div>
             )}
           </div>
-        </div>
-
-        {/* Right Column: Database Health & SQL Server Guide */}
-        <div className="md:col-span-6 space-y-6">
-          {/* Health Card */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
-              <Database className="w-5 h-5 text-emerald-600" />
-              <span>Database &amp; API Connectivity</span>
-            </h3>
-
-            <div className="space-y-3 text-xs">
-              <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                <span className="text-slate-500">Database Engine / Dialect:</span>
-                <span className="font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>{health?.db_dialect || health?.database || 'Connected'}</span>
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                <span className="text-slate-500">Backend API Status:</span>
-                <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                  {health?.status === 'ok' ? 'Online (FastAPI)' : 'Checking...'}
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                <span className="text-slate-500">WhatsApp Phone ID:</span>
-                <span className="font-mono text-emerald-700 font-semibold">1393372873849630</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                <span className="text-slate-500">Meta API Version:</span>
-                <span className="font-mono text-slate-800 font-semibold">v21.0</span>
-              </div>
-              <div className="flex justify-between items-center py-2">
-                <span className="text-slate-500">Webhook Endpoint:</span>
-                <span className="font-mono text-sky-700 font-semibold bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
-                  /webhooks/whatsapp
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* SQL Server Configuration Guide */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-3 text-xs text-slate-700">
-            <h4 className="font-bold text-slate-900 flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span>SQL Server Connection String Setup</span>
-            </h4>
-            <p className="leading-relaxed text-slate-600">
-              To point your app to Microsoft SQL Server, set <code className="font-mono font-bold text-slate-800">DATABASE_URL</code> in your <code className="font-mono font-bold text-slate-800">.env</code> file:
-            </p>
-
-            <div className="space-y-2">
-              <div className="p-3 bg-slate-900 rounded-xl font-mono text-[11px] text-emerald-300 flex items-center justify-between gap-2 overflow-x-auto">
-                <span className="truncate">DATABASE_URL=mssql+aioodbc://sa:Password123@localhost:1433/SchoolWhatsApp?driver=ODBC+Driver+17+for+SQL+Server&amp;TrustServerCertificate=yes</span>
-                <button
-                  onClick={() =>
-                    handleCopy(
-                      'DATABASE_URL=mssql+aioodbc://sa:Password123@localhost:1433/SchoolWhatsApp?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes',
-                      'odbc'
-                    )
-                  }
-                  className="p-1 rounded bg-slate-800 text-slate-300 hover:text-white flex-shrink-0"
-                  title="Copy"
-                >
-                  {copiedKey === 'odbc' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-slate-500 leading-snug">
-              All tables (<code className="text-slate-700 font-semibold">classes</code>, <code className="text-slate-700 font-semibold">students</code>, <code className="text-slate-700 font-semibold">templates</code>, <code className="text-slate-700 font-semibold">message_campaigns</code>, <code className="text-slate-700 font-semibold">message_logs</code>) are automatically generated on startup.
-            </p>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
 };
+

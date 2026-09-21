@@ -1,25 +1,20 @@
 import React from 'react';
 
-interface BadgeProps {
-  status: string;
-  className?: string;
-}
-
-export const StatusBadge: React.FC<BadgeProps> = ({ status, className = '' }) => {
+export const StatusBadge = ({ status, className = '' }) => {
   const norm = status?.toUpperCase() || 'UNKNOWN';
 
-  let badgeStyles = 'bg-slate-800/80 text-slate-300 border-slate-700';
+  let badgeStyles = 'bg-slate-100 text-slate-700 border-slate-200';
 
   if (norm === 'ACTIVE' || norm === 'SENT' || norm === 'READ' || norm === 'COMPLETED') {
-    badgeStyles = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
+    badgeStyles = 'bg-emerald-50 text-emerald-700 border-emerald-200';
   } else if (norm === 'PENDING' || norm === 'QUEUED' || norm === 'PROCESSING') {
-    badgeStyles = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
+    badgeStyles = 'bg-amber-50 text-amber-700 border-amber-200';
   } else if (norm === 'DELIVERED') {
-    badgeStyles = 'bg-sky-500/10 text-sky-400 border-sky-500/30';
+    badgeStyles = 'bg-sky-50 text-sky-700 border-sky-200';
   } else if (norm === 'REJECTED' || norm === 'FAILED') {
-    badgeStyles = 'bg-rose-500/10 text-rose-400 border-rose-500/30';
+    badgeStyles = 'bg-rose-50 text-rose-700 border-rose-200';
   } else if (norm === 'SKIPPED') {
-    badgeStyles = 'bg-slate-700/40 text-slate-400 border-slate-600/40';
+    badgeStyles = 'bg-slate-100 text-slate-600 border-slate-200';
   }
 
   return (

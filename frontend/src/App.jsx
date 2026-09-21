@@ -15,11 +15,11 @@ import { MessageLogsPage } from './pages/MessageLogsPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
-  const [selectedCampaignId, setSelectedCampaignId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [selectedCampaignId, setSelectedCampaignId] = useState(null);
   const { toasts, addToast, removeToast } = useNotification();
 
-  const handleNavigate = (tab: string, campaignId?: number) => {
+  const handleNavigate = (tab, campaignId) => {
     if (tab === 'campaign-detail' && campaignId) {
       setSelectedCampaignId(campaignId);
       setActiveTab('campaign-detail');
@@ -56,7 +56,7 @@ export function App() {
   const { title, subtitle } = getPageTitle();
 
   return (
-    <div className="flex min-h-screen bg-[#0b1120] text-slate-100 selection:bg-emerald-500 selection:text-white">
+    <div className="flex min-h-screen bg-slate-50 text-slate-900 selection:bg-emerald-500 selection:text-white font-sans">
       {/* Fixed Sidebar */}
       <Sidebar
         activeTab={activeTab === 'campaign-detail' ? 'campaigns' : activeTab}
@@ -67,7 +67,7 @@ export function App() {
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 bg-slate-50">
         <Header
           title={title}
           subtitle={subtitle}

@@ -1,17 +1,6 @@
-import {
-  ClassItem,
-  StudentItem,
-  MessageTemplate,
-  MessageCampaign,
-  CampaignDetail,
-  MessageLog,
-  TestMessageResult,
-  HealthStatus
-} from '../types';
-
 const API_BASE = ''; // Uses Vite proxy in development or direct host in production
 
-async function handleResponse<T>(response: Response): Promise<T> {
+async function handleResponse(response) {
   if (!response.ok) {
     let errorDetail = `HTTP Error ${response.status}: ${response.statusText}`;
     try {
@@ -25,56 +14,56 @@ async function handleResponse<T>(response: Response): Promise<T> {
     throw new Error(errorDetail);
   }
   if (response.status === 204) {
-    return {} as T;
+    return {};
   }
   return response.json();
 }
 
 export const api = {
   // Health
-  async getHealth(): Promise<HealthStatus> {
+  async getHealth() {
     const res = await fetch(`${API_BASE}/health`);
-    return handleResponse<HealthStatus>(res);
+    return handleResponse(res);
   },
 
   // Classes
-  async getClasses(): Promise<ClassItem[]> {
+  async getClasses() {
     const res = await fetch(`${API_BASE}/api/classes`);
-    return handleResponse<ClassItem[]>(res);
+    return handleResponse(res);
   },
 
-  async getClass(id: number): Promise<ClassItem> {
+  async getClass(id) {
     const res = await fetch(`${API_BASE}/api/classes/${id}`);
-    return handleResponse<ClassItem>(res);
+    return handleResponse(res);
   },
 
-  async createClass(data: { name: string; section?: string }): Promise<ClassItem> {
+  async createClass(data) {
     const res = await fetch(`${API_BASE}/api/classes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    return handleResponse<ClassItem>(res);
+    return handleResponse(res);
   },
 
-  async updateClass(id: number, data: { name?: string; section?: string }): Promise<ClassItem> {
+  async updateClass(id, data) {
     const res = await fetch(`${API_BASE}/api/classes/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    return handleResponse<ClassItem>(res);
+    return handleResponse(res);
   },
 
-  async deleteClass(id: number): Promise<void> {
+  async deleteClass(id) {
     const res = await fetch(`${API_BASE}/api/classes/${id}`, {
       method: 'DELETE',
     });
-    return handleResponse<void>(res);
+    return handleResponse(res);
   },
 
   // Students
-  async getStudents(params?: { class_id?: number; search?: string; opt_in?: boolean }): Promise<StudentItem[]> {
+  async getStudents(params) {
     const url = new URL(`${window.location.origin}/api/students`);
     if (params?.class_id !== undefined && params?.class_id !== null) {
       url.searchParams.append('class_id', params.class_id.toString());
@@ -87,97 +76,72 @@ export const api = {
     }
 
     const res = await fetch(url.pathname + url.search);
-    return handleResponse<StudentItem[]>(res);
+    return handleResponse(res);
   },
 
-  async getStudent(id: number): Promise<StudentItem> {
+  async getStudent(id) {
     const res = await fetch(`${API_BASE}/api/students/${id}`);
-    return handleResponse<StudentItem>(res);
+    return handleResponse(res);
   },
 
-  async createStudent(data: {
-    class_id: number;
-    student_name: string;
-    parent_name?: string;
-    whatsapp_number: string;
-    whatsapp_opt_in?: boolean;
-  }): Promise<StudentItem> {
+  async createStudent(data) {
     const res = await fetch(`${API_BASE}/api/students`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    return handleResponse<StudentItem>(res);
+    return handleResponse(res);
   },
 
-  async updateStudent(
-    id: number,
-    data: {
-      class_id?: number;
-      student_name?: string;
-      parent_name?: string;
-      whatsapp_number?: string;
-      whatsapp_opt_in?: boolean;
-    }
-  ): Promise<StudentItem> {
+  async updateStudent(id, data) {
     const res = await fetch(`${API_BASE}/api/students/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    return handleResponse<StudentItem>(res);
+    return handleResponse(res);
   },
 
-  async deleteStudent(id: number): Promise<void> {
+  async deleteStudent(id) {
     const res = await fetch(`${API_BASE}/api/students/${id}`, {
       method: 'DELETE',
     });
-    return handleResponse<void>(res);
+    return handleResponse(res);
   },
 
   // Templates
-  async getTemplates(): Promise<MessageTemplate[]> {
+  async getTemplates() {
     const res = await fetch(`${API_BASE}/api/templates`);
-    return handleResponse<MessageTemplate[]>(res);
+    return handleResponse(res);
   },
 
-  async getTemplate(id: number): Promise<MessageTemplate> {
+  async getTemplate(id) {
     const res = await fetch(`${API_BASE}/api/templates/${id}`);
-    return handleResponse<MessageTemplate>(res);
+    return handleResponse(res);
   },
 
   // Campaigns
-  async getCampaigns(): Promise<MessageCampaign[]> {
+  async getCampaigns() {
     const res = await fetch(`${API_BASE}/api/campaigns`);
-    return handleResponse<MessageCampaign[]>(res);
+    return handleResponse(res);
   },
 
-  async getCampaign(id: number): Promise<CampaignDetail> {
+  async getCampaign(id) {
     const res = await fetch(`${API_BASE}/api/campaigns/${id}`);
-    return handleResponse<CampaignDetail>(res);
+    return handleResponse(res);
   },
 
-  async createCampaign(data: {
-    class_id: number;
-    template_id: number;
-    student_ids?: number[];
-    dynamic_parameters?: string[];
-  }): Promise<MessageCampaign> {
+  async createCampaign(data) {
     const res = await fetch(`${API_BASE}/api/campaigns`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    return handleResponse<MessageCampaign>(res);
+    return handleResponse(res);
   },
 
   // Message Logs
-  async getMessageLogs(params?: {
-    campaign_id?: number;
-    student_id?: number;
-    status?: string;
-    limit?: number;
-  }): Promise<MessageLog[]> {
+  async getMessageLogs(params) {
     const url = new URL(`${window.location.origin}/api/message-logs`);
     if (params?.campaign_id) url.searchParams.append('campaign_id', params.campaign_id.toString());
     if (params?.student_id) url.searchParams.append('student_id', params.student_id.toString());
@@ -185,20 +149,16 @@ export const api = {
     if (params?.limit) url.searchParams.append('limit', params.limit.toString());
 
     const res = await fetch(url.pathname + url.search);
-    return handleResponse<MessageLog[]>(res);
+    return handleResponse(res);
   },
 
   // Test Direct WhatsApp Message
-  async sendTestMessage(data: {
-    recipient_number: string;
-    template_name?: string;
-    language_code?: string;
-  }): Promise<TestMessageResult> {
+  async sendTestMessage(data) {
     const res = await fetch(`${API_BASE}/api/messages/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    return handleResponse<TestMessageResult>(res);
+    return handleResponse(res);
   },
 };

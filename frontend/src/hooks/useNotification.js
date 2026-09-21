@@ -1,16 +1,9 @@
 import { useState, useCallback } from 'react';
 
-export interface ToastMessage {
-  id: string;
-  type: 'success' | 'error' | 'info' | 'warning';
-  title: string;
-  message?: string;
-}
-
 export function useNotification() {
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [toasts, setToasts] = useState([]);
 
-  const addToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
+  const addToast = useCallback((toast) => {
     const id = Math.random().toString(36).substring(2, 9);
     const newToast = { ...toast, id };
     setToasts((prev) => [...prev, newToast]);
@@ -20,7 +13,7 @@ export function useNotification() {
     }, 4500);
   }, []);
 
-  const removeToast = useCallback((id: string) => {
+  const removeToast = useCallback((id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 

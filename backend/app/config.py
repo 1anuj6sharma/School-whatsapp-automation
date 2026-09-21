@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     )
 
     # Meta WhatsApp Cloud API Settings
-    WHATSAPP_PHONE_NUMBER_ID: str = Field(default="1393372873849630", description="WhatsApp Cloud API Phone Number ID")
-    WHATSAPP_BUSINESS_ACCOUNT_ID: str = Field(default="1086203377344807", description="WhatsApp Business Account ID (WABA ID)")
+    WHATSAPP_PHONE_NUMBER_ID: str = Field(default="", description="WhatsApp Cloud API Phone Number ID")
+    WHATSAPP_BUSINESS_ACCOUNT_ID: str = Field(default="", description="WhatsApp Business Account ID (WABA ID)")
     WHATSAPP_ACCESS_TOKEN: str = Field(default="", description="Meta User/System Access Token")
     WHATSAPP_API_VERSION: str = Field(default="v26.0", description="Meta Graph API Version")
     WHATSAPP_VERIFY_TOKEN: str = Field(default="school_whatsapp_verify_token_secret_123", description="Webhook Verification Token")

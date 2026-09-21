@@ -228,10 +228,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
             <span>Meta WhatsApp Message Templates</span>
           </h2>
           <p className="text-sm text-slate-500 mt-1">
-            Real-time synchronization with Meta WhatsApp Template Manager for WABA{' '}
-            <span className="font-mono text-xs bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200">
-              1086203377344807
-            </span>
+            Real-time synchronization with Meta WhatsApp Template Manager
           </p>
         </div>
 
@@ -282,7 +279,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
         </div>
 
         <a
-          href="https://business.facebook.com/latest/whatsapp_manager/message_templates/?business_id=1338037187637842&tab=message-templates&asset_id=1086203377344807"
+          href="https://business.facebook.com/latest/whatsapp_manager/message_templates/"
           target="_blank"
           rel="noopener noreferrer"
           className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-100/80 hover:bg-sky-200/80 text-sky-900 font-semibold text-[11px] whitespace-nowrap transition-colors"

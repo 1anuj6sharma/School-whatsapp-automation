@@ -8,7 +8,7 @@ from app.utils.logger import logger
 async def seed_database():
     """
     Initializes database tables and synchronizes all live templates directly
-    from Meta WhatsApp Manager (WABA ID: 1086203377344807).
+    from Meta WhatsApp Manager.
     """
     logger.info("Initializing database schema...")
     await init_db()

@@ -30,7 +30,7 @@ class WhatsAppService:
         return True, ""
 
     def get_waba_id(self) -> str:
-        return self.waba_id or "1086203377344807"
+        return (self.waba_id or settings.WHATSAPP_BUSINESS_ACCOUNT_ID or "").strip()
 
     async def send_template_message(
         self,

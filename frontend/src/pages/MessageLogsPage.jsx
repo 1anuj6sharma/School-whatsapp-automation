@@ -32,20 +32,20 @@ export const MessageLogsPage = () => {
   return (
     <div className="space-y-6 animate-fade-in pb-12">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
-            <ScrollText className="w-6 h-6 text-emerald-600" />
+          <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+            <ScrollText className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600 shrink-0" />
             <span>Message Delivery Logs</span>
           </h2>
-          <p className="text-sm text-slate-500 mt-1">
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
             Complete audit trail of individual WhatsApp dispatches and delivery confirmations.
           </p>
         </div>
 
         <button
           onClick={fetchLogs}
-          className="flex items-center gap-2 px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 rounded-xl text-xs font-semibold border border-slate-200 shadow-xs transition-colors self-start md:self-auto"
+          className="flex items-center justify-center gap-2 px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 rounded-xl text-xs font-semibold border border-slate-200 shadow-xs transition-colors self-start sm:self-auto w-full sm:w-auto"
         >
           <RefreshCw className="w-3.5 h-3.5" />
           <span>Refresh Logs</span>
@@ -53,12 +53,12 @@ export const MessageLogsPage = () => {
       </div>
 
       {/* Filter Tabs */}
-      <div className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap gap-2 items-center">
+      <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-xs flex overflow-x-auto gap-1.5 sm:gap-2 items-center max-w-full">
         {['ALL', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'SKIPPED'].map((st) => (
           <button
             key={st}
             onClick={() => setStatusFilter(st)}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+            className={`px-3 sm:px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
               statusFilter === st
                 ? 'bg-emerald-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -81,7 +81,7 @@ export const MessageLogsPage = () => {
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-700">
+            <table className="w-full text-left text-sm text-slate-700 min-w-[750px]">
               <thead className="bg-slate-50/80 text-xs uppercase font-semibold text-slate-500 border-b border-slate-200">
                 <tr>
                   <th className="px-6 py-4">Log ID</th>

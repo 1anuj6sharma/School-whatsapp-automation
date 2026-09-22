@@ -48,9 +48,9 @@ export const DashboardPage = ({ onNavigate }) => {
   }
 
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-6 sm:space-y-8 animate-fade-in">
       {/* Overview Stat Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <StatCard
           title="Total Students"
           value={totalStudents}
@@ -86,21 +86,21 @@ export const DashboardPage = ({ onNavigate }) => {
       </div>
 
       {/* Quick Launch Banner */}
-      <div className="bg-gradient-to-r from-emerald-50 via-teal-50/40 to-white p-6 rounded-2xl border border-emerald-200/80 shadow-xs flex flex-col md:flex-row items-center justify-between gap-4">
+      <div className="bg-gradient-to-r from-emerald-50 via-teal-50/40 to-white p-4 sm:p-6 rounded-2xl border border-emerald-200/80 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+          <h3 className="text-base sm:text-lg font-bold text-slate-900 flex flex-wrap items-center gap-2">
             <span>Ready to send WhatsApp updates?</span>
             <span className="px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-xs font-semibold border border-emerald-200">
               Meta Verified
             </span>
           </h3>
-          <p className="text-sm text-slate-600 mt-1">
+          <p className="text-xs sm:text-sm text-slate-600 mt-1">
             Broadcast official notifications to entire classes with concurrent individual dispatches.
           </p>
         </div>
         <button
           onClick={() => onNavigate('send-message')}
-          className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-all hover:shadow active:scale-95 whitespace-nowrap"
+          className="flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-all hover:shadow active:scale-95 whitespace-nowrap w-full md:w-auto"
         >
           <Send className="w-4 h-4" />
           <span>Launch New Broadcast</span>
@@ -109,22 +109,22 @@ export const DashboardPage = ({ onNavigate }) => {
 
       {/* Recent Campaigns Table */}
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden shadow-xs">
-        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/50">
-          <div className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-emerald-600" />
-            <h3 className="font-bold text-slate-900 text-base">Recent Broadcast Campaigns</h3>
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/50 gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Clock className="w-4 h-4 text-emerald-600 shrink-0" />
+            <h3 className="font-bold text-slate-900 text-sm sm:text-base truncate">Recent Broadcast Campaigns</h3>
           </div>
           <button
             onClick={() => onNavigate('campaigns')}
-            className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 transition-colors"
+            className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 transition-colors shrink-0 whitespace-nowrap"
           >
-            <span>View All Campaigns</span>
+            <span>View All</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {recentCampaigns.length === 0 ? (
-          <div className="p-8">
+          <div className="p-6 sm:p-8">
             <EmptyState
               icon={Send}
               title="No broadcast campaigns yet"
@@ -135,7 +135,7 @@ export const DashboardPage = ({ onNavigate }) => {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-700">
+            <table className="w-full text-left text-sm text-slate-700 min-w-[700px]">
               <thead className="bg-slate-50/80 text-xs uppercase font-semibold text-slate-500 border-b border-slate-200">
                 <tr>
                   <th className="px-6 py-3.5">Campaign ID</th>

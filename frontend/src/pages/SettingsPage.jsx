@@ -44,14 +44,49 @@ export const SettingsPage = ({ showToast }) => {
     fetchHealth();
   }, []);
 
-  const handleCopy = (text, key) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    showToast({ type: 'success', title: 'Copied to clipboard' });
-    setTimeout(() => {
-      setCopiedKey(null);
-    }, 2000);
+  const handleCopy = async (text, key) => {
+    if (!text) {
+      showToast({ type: 'warning', title: 'Nothing to copy' });
+      return;
+    }
+
+    let copied = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    if (!copied) {
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        textArea.setAttribute('readonly', '');
+        document.body.appendChild(textArea);
+        textArea.select();
+        textArea.setSelectionRange(0, 99999);
+        copied = document.execCommand('copy');
+        document.body.removeChild(textArea);
+      } catch (e) {
+        console.error('Copy fallback failed', e);
+      }
+    }
+
+    if (copied) {
+      setCopiedKey(key);
+      showToast({ type: 'success', title: 'Copied to clipboard' });
+      setTimeout(() => {
+        setCopiedKey(null);
+      }, 2000);
+    } else {
+      showToast({ type: 'error', title: 'Could not copy', message: 'Please copy manually.' });
+    }
   };
 
   const handleSendTestMessage = async (e) => {
@@ -103,28 +138,28 @@ export const SettingsPage = ({ showToast }) => {
   const wa = health?.whatsapp || {};
 
   return (
-    <div className="space-y-8 animate-fade-in max-w-5xl mx-auto pb-12">
+    <div className="space-y-6 sm:space-y-8 animate-fade-in max-w-5xl mx-auto pb-12">
       {/* Header */}
       <div className="border-b border-slate-200 pb-4">
-        <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
-          <Settings className="w-6 h-6 text-emerald-600" />
+        <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+          <Settings className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600 shrink-0" />
           <span>System Settings &amp; WhatsApp Diagnostics</span>
         </h2>
-        <p className="text-sm text-slate-500 mt-1">
+        <p className="text-xs sm:text-sm text-slate-500 mt-1">
           Verify Meta Cloud API connectivity, inspect active credentials, and test direct message routing.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
         {/* Left Column: Direct Test Dispatcher */}
-        <div className="md:col-span-6 space-y-6">
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-5">
+        <div className="lg:col-span-6 space-y-6">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-5">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
+              <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0">
                 <Send className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-bold text-slate-900 text-base">Direct Meta API Test</h3>
+                <h3 className="font-bold text-slate-900 text-sm sm:text-base">Direct Meta API Test</h3>
                 <p className="text-xs text-slate-500">
                   Sends an immediate <span className="font-mono text-emerald-700 font-semibold">hello_world</span> message to verify credentials.
                 </p>
@@ -224,15 +259,15 @@ export const SettingsPage = ({ showToast }) => {
         </div>
 
         {/* Right Column: Meta WhatsApp Cloud API Credentials & Configuration Card */}
-        <div className="md:col-span-6 space-y-6">
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-5">
+        <div className="lg:col-span-6 space-y-6">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-5">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-100">
+                <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0">
                   <Smartphone className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-base">Meta WhatsApp Credentials</h3>
+                  <h3 className="font-bold text-slate-900 text-sm sm:text-base">Meta WhatsApp Credentials</h3>
                   <p className="text-[11px] text-slate-500">Live configuration loaded from environment</p>
                 </div>
               </div>
@@ -325,7 +360,7 @@ export const SettingsPage = ({ showToast }) => {
                   </span>
                   <button
                     type="button"
-                    onClick={() => handleCopy(wa.verify_token, 'verify_token')}
+                    onClick={() => handleCopy(wa.verify_token || 'school_whatsapp_verify_token_secret_123', 'verify_token')}
                     className="text-slate-400 hover:text-slate-700 flex items-center gap-1 cursor-pointer transition-colors"
                   >
                     {copiedKey === 'verify_token' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}

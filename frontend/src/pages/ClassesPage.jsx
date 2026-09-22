@@ -206,13 +206,13 @@ export const ClassesPage = ({
   return (
     <div className="space-y-6 animate-fade-in pb-12">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
-            <GraduationCap className="w-6 h-6 text-emerald-600" />
+          <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+            <GraduationCap className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600 shrink-0" />
             <span>Groups &amp; Class Sections</span>
           </h2>
-          <p className="text-sm text-slate-500 mt-1">
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
             Create custom groups (classes, sections, committees) and add student phone records.
           </p>
         </div>
@@ -223,7 +223,7 @@ export const ClassesPage = ({
             setFormSection('');
             setShowCreateModal(true);
           }}
-          className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95 self-start md:self-auto"
+          className="flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95 self-start sm:self-auto w-full sm:w-auto"
         >
           <Plus className="w-4 h-4" />
           <span>Create New Group</span>

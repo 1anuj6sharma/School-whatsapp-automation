@@ -298,27 +298,27 @@ export const SendMessagePage = ({
     <div className="max-w-6xl mx-auto space-y-8 animate-fade-in pb-12">
       {/* Title & Description */}
       <div className="border-b border-slate-200 pb-4">
-        <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
-          <Send className="w-6 h-6 text-emerald-600" />
+        <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+          <Send className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600 shrink-0" />
           <span>Send WhatsApp Broadcast</span>
         </h2>
-        <p className="text-sm text-slate-500 mt-1">
+        <p className="text-xs sm:text-sm text-slate-500 mt-1">
           Broadcast official WhatsApp messages with personalized student &amp; parent names and custom common message content.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
         {/* Left Column: Form & Configuration */}
         <div className="lg:col-span-7 space-y-6">
           {/* 1. Class Selection */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <label className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <Users className="w-4 h-4 text-emerald-600" />
                 <span>1. Select Target Class</span>
               </label>
               {selectedClassId && (
-                <span className="text-xs px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+                <span className="text-xs px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold self-start sm:self-auto">
                   {students.length} Total Enrolled
                 </span>
               )}
@@ -339,13 +339,13 @@ export const SendMessagePage = ({
           </div>
 
           {/* 2. Template Selection */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <label className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <FileCode className="w-4 h-4 text-emerald-600" />
                 <span>2. Select WhatsApp Template</span>
               </label>
-              {selectedTemplate && <StatusBadge status={selectedTemplate.status} />}
+              {selectedTemplate && <div className="self-start sm:self-auto"><StatusBadge status={selectedTemplate.status} /></div>}
             </div>
 
             <select
@@ -376,15 +376,15 @@ export const SendMessagePage = ({
           </div>
 
           {/* 3. Recipient Student Selection Table */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <label className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <CheckSquare className="w-4 h-4 text-emerald-600" />
                   <span>3. Class Recipients Checklist</span>
                 </label>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Click a student to preview their personalized message on the right.
+                  Click a student to preview their personalized message.
                 </p>
               </div>
 
@@ -392,7 +392,7 @@ export const SendMessagePage = ({
                 <button
                   type="button"
                   onClick={handleSelectAllOptedIn}
-                  className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                  className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-colors self-start sm:self-auto"
                 >
                   {selectedStudentIds.length === optedInCount ? 'Deselect All' : 'Select All Opted-In'}
                 </button>
@@ -481,8 +481,8 @@ export const SendMessagePage = ({
         {/* Right Column: Template Variables Editor & Message Preview */}
         <div className="lg:col-span-5 space-y-6">
           {/* Dynamic Template Variables Box */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <Sliders className="w-4 h-4 text-emerald-600" />
@@ -497,7 +497,7 @@ export const SendMessagePage = ({
                 <button
                   type="button"
                   onClick={handleResetVariables}
-                  className="flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2 py-1 rounded transition-colors"
+                  className="flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2 py-1 rounded transition-colors self-start sm:self-auto"
                 >
                   <RotateCcw className="w-3 h-3" />
                   <span>Reset</span>
@@ -520,7 +520,7 @@ export const SendMessagePage = ({
 
                   return (
                     <div key={num} className="p-3 rounded-xl bg-slate-50/70 border border-slate-200 space-y-2">
-                      <div className="flex items-center justify-between">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
                         <label className="text-xs font-mono font-bold text-slate-900 flex items-center gap-1.5">
                           <Edit3 className="w-3.5 h-3.5 text-emerald-600" />
                           <span>Placeholder &#123;&#123;{num}&#125;&#125;:</span>
@@ -537,7 +537,7 @@ export const SendMessagePage = ({
                       </div>
 
                       {/* Dynamic Tag Quick Buttons */}
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={() => handleVariableChange(num, '{Parent Name}')}
@@ -578,7 +578,7 @@ export const SendMessagePage = ({
           </div>
 
           {/* Realistic WhatsApp Preview with Student Switcher */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <Phone className="w-4 h-4 text-emerald-600" />
@@ -587,12 +587,12 @@ export const SendMessagePage = ({
 
               {/* Student preview selector */}
               {students.length > 1 && (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-slate-500 font-medium">Previewing for:</span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] text-slate-500 font-medium">Previewing:</span>
                   <select
                     value={previewStudent?.id || ''}
                     onChange={(e) => setPreviewStudentId(Number(e.target.value))}
-                    className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-lg px-2 py-1 focus:outline-none"
+                    className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-lg px-2 py-1 focus:outline-none max-w-[180px] sm:max-w-xs truncate"
                   >
                     {students.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -608,12 +608,12 @@ export const SendMessagePage = ({
             <div className="rounded-2xl whatsapp-chat-bg border border-slate-300 p-4 shadow-md relative overflow-hidden">
               {/* WhatsApp Chat Header */}
               <div className="flex items-center gap-3 pb-3 mb-3 border-b border-slate-300/80 bg-[#008069] text-white -mx-4 -mt-4 p-3.5 shadow-xs">
-                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-xs">
+                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-xs shrink-0">
                   ABC
                 </div>
-                <div>
-                  <h5 className="text-xs font-bold text-white">ABC Public School</h5>
-                  <p className="text-[10px] text-emerald-100">
+                <div className="min-w-0">
+                  <h5 className="text-xs font-bold text-white truncate">ABC Public School</h5>
+                  <p className="text-[10px] text-emerald-100 truncate">
                     To: {previewStudent?.parent_name || 'Parent'} (+{previewStudent?.whatsapp_number || '91...'})
                   </p>
                 </div>
@@ -641,7 +641,7 @@ export const SendMessagePage = ({
               </div>
 
               <div className="mt-3 text-center">
-                <span className="text-[10px] text-slate-600 font-mono bg-white/85 px-2.5 py-0.5 rounded-full border border-slate-300/70 shadow-xs">
+                <span className="text-[10px] text-slate-600 font-mono bg-white/85 px-2.5 py-0.5 rounded-full border border-slate-300/70 shadow-xs inline-block truncate max-w-full">
                   Showing resolved text for: <strong className="text-slate-900">{previewStudent?.student_name || 'Student'}</strong>
                 </span>
               </div>
@@ -649,7 +649,7 @@ export const SendMessagePage = ({
           </div>
 
           {/* Broadcast Summary Card & CTA */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-5">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-5">
             <h4 className="text-sm font-bold text-slate-900">Broadcast Summary</h4>
 
             <div className="space-y-2.5 text-xs">

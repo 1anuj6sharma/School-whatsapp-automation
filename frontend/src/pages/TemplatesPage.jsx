@@ -220,35 +220,35 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
-      {/* Header with Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
-            <FileCode className="w-6 h-6 text-emerald-600" />
-            <span>Meta WhatsApp Message Templates</span>
+          <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+            <FileCode className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600 shrink-0" />
+            <span>Meta WhatsApp Templates</span>
           </h2>
-          <p className="text-sm text-slate-500 mt-1">
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
             Real-time synchronization with Meta WhatsApp Template Manager
           </p>
         </div>
 
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
           {/* Sync Button */}
           <button
             type="button"
             onClick={handleSyncMeta}
             disabled={syncing}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 shadow-xs transition-all active:scale-95 disabled:opacity-50"
+            className="flex items-center gap-2 px-3 sm:px-3.5 py-2 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 shadow-xs transition-all active:scale-95 disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${syncing ? 'animate-spin' : ''}`} />
-            <span>{syncing ? 'Syncing with Meta...' : 'Sync with Meta'}</span>
+            <span>{syncing ? 'Syncing...' : 'Sync with Meta'}</span>
           </button>
 
           {/* Create Template Button */}
           <button
             type="button"
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-all active:scale-95"
+            className="flex items-center gap-2 px-3 sm:px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-all active:scale-95"
           >
             <Plus className="w-4 h-4" />
             <span>Create Template</span>
@@ -258,9 +258,9 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
           <button
             type="button"
             onClick={onNavigateToSend}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-xs transition-all active:scale-95"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-xs transition-all active:scale-95"
           >
-            <span>Use in Broadcast</span>
+            <span>Broadcast</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -290,48 +290,48 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex items-center justify-between gap-4 flex-wrap border-b border-slate-200 pb-3">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full">
           <button
             type="button"
             onClick={() => setFilterStatus('ALL')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${
               filterStatus === 'ALL'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
             }`}
           >
-            All Templates ({templates.length})
+            All ({templates.length})
           </button>
           <button
             type="button"
             onClick={() => setFilterStatus('ACTIVE')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
               filterStatus === 'ACTIVE'
                 ? 'bg-emerald-600 text-white shadow-xs'
                 : 'bg-white text-emerald-700 hover:bg-emerald-50 border border-slate-200'
             }`}
           >
             <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>Approved / Active ({activeCount})</span>
+            <span>Approved ({activeCount})</span>
           </button>
           <button
             type="button"
             onClick={() => setFilterStatus('PENDING')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
               filterStatus === 'PENDING'
                 ? 'bg-amber-600 text-white shadow-xs'
                 : 'bg-white text-amber-700 hover:bg-amber-50 border border-slate-200'
             }`}
           >
             <Clock className="w-3.5 h-3.5" />
-            <span>In Review / Pending ({pendingCount})</span>
+            <span>Pending ({pendingCount})</span>
           </button>
           {rejectedCount > 0 && (
             <button
               type="button"
               onClick={() => setFilterStatus('REJECTED')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
                 filterStatus === 'REJECTED'
                   ? 'bg-rose-600 text-white shadow-xs'
                   : 'bg-white text-rose-700 hover:bg-rose-50 border border-slate-200'
@@ -344,7 +344,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
         </div>
 
         {pendingCount > 0 && (
-          <div className="flex items-center gap-2 text-xs text-amber-700 font-medium animate-pulse">
+          <div className="flex items-center gap-2 text-xs text-amber-700 font-medium animate-pulse shrink-0">
             <span className="w-2 h-2 rounded-full bg-amber-500"></span>
             <span>Live auto-checking Meta review status every 10s...</span>
           </div>

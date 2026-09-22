@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Send, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { Send, CheckCircle2, AlertCircle, RefreshCw, Menu } from 'lucide-react';
 import { api } from '../services/api';
 
-export const Header = ({ title, subtitle, onQuickSendClick }) => {
+export const Header = ({ title, subtitle, onQuickSendClick, onMenuToggle }) => {
   const [backendStatus, setBackendStatus] = useState('checking');
 
   const checkStatus = async () => {
@@ -25,16 +25,27 @@ export const Header = ({ title, subtitle, onQuickSendClick }) => {
   }, []);
 
   return (
-    <header className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-8 py-4 flex items-center justify-between shadow-xs">
-      <div>
-        <h2 className="text-xl font-bold text-slate-900 tracking-tight">{title}</h2>
-        {subtitle && <p className="text-xs text-slate-500 mt-0.5 font-normal">{subtitle}</p>}
+    <header className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-4 py-3 sm:px-6 md:px-8 md:py-4 flex items-center justify-between gap-3 shadow-xs">
+      <div className="flex items-center gap-3 min-w-0">
+        {onMenuToggle && (
+          <button
+            onClick={onMenuToggle}
+            className="md:hidden p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors border border-slate-200 shrink-0"
+            aria-label="Open Navigation Menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        )}
+        <div className="min-w-0">
+          <h2 className="text-base sm:text-xl font-bold text-slate-900 tracking-tight truncate">{title}</h2>
+          {subtitle && <p className="text-xs text-slate-500 mt-0.5 font-normal hidden sm:block truncate">{subtitle}</p>}
+        </div>
       </div>
 
-      <div className="flex items-center gap-3.5">
+      <div className="flex items-center gap-2 sm:gap-3.5 shrink-0">
         {/* Backend health status indicator */}
         <div
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border cursor-pointer transition-all ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold border cursor-pointer transition-all ${
             backendStatus === 'connected'
               ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100/70'
               : backendStatus === 'checking'
@@ -44,25 +55,33 @@ export const Header = ({ title, subtitle, onQuickSendClick }) => {
           onClick={checkStatus}
           title="Click to recheck backend connectivity"
         >
-          {backendStatus === 'connected' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
-          {backendStatus === 'checking' && <RefreshCw className="w-3.5 h-3.5 text-amber-600 animate-spin" />}
-          {backendStatus === 'error' && <AlertCircle className="w-3.5 h-3.5 text-rose-600" />}
-          <span>
+          {backendStatus === 'connected' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+          {backendStatus === 'checking' && <RefreshCw className="w-3.5 h-3.5 text-amber-600 animate-spin shrink-0" />}
+          {backendStatus === 'error' && <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
+          <span className="hidden xs:inline">
             {backendStatus === 'connected'
               ? 'Backend Online'
               : backendStatus === 'checking'
               ? 'Checking...'
               : 'Backend Offline'}
           </span>
+          <span className="xs:hidden">
+            {backendStatus === 'connected'
+              ? 'Online'
+              : backendStatus === 'checking'
+              ? 'Check'
+              : 'Offline'}
+          </span>
         </div>
 
         {onQuickSendClick && (
           <button
             onClick={onQuickSendClick}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95"
+            className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95 whitespace-nowrap"
           >
             <Send className="w-3.5 h-3.5" />
-            <span>New Broadcast</span>
+            <span className="hidden sm:inline">New Broadcast</span>
+            <span className="sm:hidden">Broadcast</span>
           </button>
         )}
       </div>

@@ -17,6 +17,7 @@ import { SettingsPage } from './pages/SettingsPage';
 export function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { toasts, addToast, removeToast } = useNotification();
 
   const handleNavigate = (tab, campaignId) => {
@@ -57,13 +58,15 @@ export function App() {
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900 selection:bg-emerald-500 selection:text-white font-sans">
-      {/* Fixed Sidebar */}
+      {/* Sidebar (Desktop Sticky + Mobile Drawer) */}
       <Sidebar
         activeTab={activeTab === 'campaign-detail' ? 'campaigns' : activeTab}
         setActiveTab={(tab) => {
           setSelectedCampaignId(null);
           setActiveTab(tab);
         }}
+        isOpen={mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
       />
 
       {/* Main Content Area */}
@@ -72,9 +75,10 @@ export function App() {
           title={title}
           subtitle={subtitle}
           onQuickSendClick={activeTab !== 'send-message' ? () => setActiveTab('send-message') : undefined}
+          onMenuToggle={() => setMobileMenuOpen((prev) => !prev)}
         />
 
-        <main className="flex-1 p-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
           {activeTab === 'dashboard' && <DashboardPage onNavigate={handleNavigate} />}
           {activeTab === 'send-message' && (
             <SendMessagePage

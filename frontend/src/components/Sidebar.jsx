@@ -10,9 +10,10 @@ import {
   Settings,
   ShieldCheck,
   MessageSquareShare,
+  X,
 } from 'lucide-react';
 
-export const Sidebar = ({ activeTab, setActiveTab }) => {
+export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose }) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'send-message', label: 'Send Message', icon: Send, highlight: true },
@@ -24,18 +25,36 @@ export const Sidebar = ({ activeTab, setActiveTab }) => {
     { id: 'settings', label: 'Settings & Test', icon: Settings },
   ];
 
-  return (
-    <aside className="w-64 bg-white border-r border-slate-200/90 flex flex-col justify-between h-screen sticky top-0 z-20 shadow-xs">
+  const handleItemClick = (id) => {
+    setActiveTab(id);
+    if (onClose) {
+      onClose();
+    }
+  };
+
+  const sidebarContent = (
+    <aside className="w-64 bg-white border-r border-slate-200/90 flex flex-col justify-between h-full shadow-xs">
       <div>
         {/* Brand / Logo */}
-        <div className="p-6 flex items-center gap-3.5 border-b border-slate-100">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-sm shadow-emerald-600/30">
-            <MessageSquareShare className="w-5 h-5" />
+        <div className="p-6 flex items-center justify-between border-b border-slate-100">
+          <div className="flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-sm shadow-emerald-600/30">
+              <MessageSquareShare className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="font-bold text-base text-slate-900 tracking-tight leading-none">School WA</h1>
+              <p className="text-[11px] font-semibold text-emerald-600 mt-1 uppercase tracking-wider">Cloud Broadcast</p>
+            </div>
           </div>
-          <div>
-            <h1 className="font-bold text-base text-slate-900 tracking-tight leading-none">School WA</h1>
-            <p className="text-[11px] font-semibold text-emerald-600 mt-1 uppercase tracking-wider">Cloud Broadcast</p>
-          </div>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+              aria-label="Close Sidebar"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Navigation Items */}
@@ -47,7 +66,7 @@ export const Sidebar = ({ activeTab, setActiveTab }) => {
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => handleItemClick(item.id)}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${
                   isActive
                     ? item.highlight
@@ -90,5 +109,36 @@ export const Sidebar = ({ activeTab, setActiveTab }) => {
         </p>
       </div>
     </aside>
+  );
+
+  return (
+    <>
+      {/* Desktop Persistent Sidebar */}
+      <div className="hidden md:block h-screen sticky top-0 z-20 shrink-0">
+        {sidebarContent}
+      </div>
+
+      {/* Mobile Drawer Overlay */}
+      <div
+        className={`fixed inset-0 z-50 md:hidden transition-opacity duration-300 ${
+          isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        {/* Backdrop */}
+        <div
+          className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+          onClick={onClose}
+        />
+
+        {/* Drawer Sheet */}
+        <div
+          className={`fixed inset-y-0 left-0 max-w-[280px] w-full bg-white shadow-2xl transition-transform duration-300 ease-out transform ${
+            isOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          {sidebarContent}
+        </div>
+      </div>
+    </>
   );
 };

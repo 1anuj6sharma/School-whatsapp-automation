@@ -288,9 +288,14 @@ class WhatsAppService:
 
                 if response.status_code not in (200, 201):
                     error_data = data.get("error", {})
-                    err_msg = error_data.get("message") or error_data.get("error_user_msg") or f"Meta error {response.status_code}"
-                    logger.error(f"[WhatsAppService] Meta rejected template creation: {err_msg}")
-                    raise ValueError(err_msg)
+                    error_user_msg = error_data.get("error_user_msg")
+                    error_user_title = error_data.get("error_user_title")
+                    details = error_data.get("error_data", {}).get("details")
+                    msg = error_data.get("message", f"Meta error {response.status_code}")
+                    
+                    full_error = f"{error_user_title}: {error_user_msg}" if (error_user_title and error_user_msg) else (error_user_msg or details or msg)
+                    logger.error(f"[WhatsAppService] Meta rejected template creation. Full response: {data}")
+                    raise ValueError(full_error)
 
                 logger.info(f"[WhatsAppService] Template '{clean_name}' created on Meta successfully: ID {data.get('id')}")
                 return {

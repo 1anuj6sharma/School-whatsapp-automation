@@ -317,17 +317,227 @@ class WhatsAppService:
         headers = {"Authorization": f"Bearer {self.access_token}"}
         params = {"name": template_name}
 
+    def update_credentials(
+        self,
+        phone_number_id: Optional[str] = None,
+        waba_id: Optional[str] = None,
+        access_token: Optional[str] = None
+    ) -> None:
+        """Dynamically update credentials in-memory for immediate use without server restart."""
+        if phone_number_id:
+            self.phone_number_id = phone_number_id.strip()
+            self.base_url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
+            settings.WHATSAPP_PHONE_NUMBER_ID = self.phone_number_id
+        if waba_id:
+            self.waba_id = waba_id.strip()
+            settings.WHATSAPP_BUSINESS_ACCOUNT_ID = self.waba_id
+        if access_token:
+            self.access_token = access_token.strip()
+            settings.WHATSAPP_ACCESS_TOKEN = self.access_token
+
+        logger.info(
+            f"[WhatsAppService] Credentials updated: Phone ID={self.phone_number_id}, WABA ID={self.waba_id}, Token Configured={bool(self.access_token)}"
+        )
+
+    async def exchange_code_for_token(
+        self,
+        code: str,
+        app_id: Optional[str] = None,
+        app_secret: Optional[str] = None,
+        redirect_uri: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Exchanges OAuth authorization code from Embedded Signup for a Meta User Access Token.
+        Endpoint: GET https://graph.facebook.com/{version}/oauth/access_token
+
+        FB.login() popup flows bind the code to an empty/null redirect_uri.
+        This method auto-tries all common redirect_uri variants until Meta accepts one.
+        """
+        target_app_id = (app_id or settings.META_APP_ID or "").strip()
+        target_app_secret = (app_secret or settings.META_APP_SECRET or "").strip()
+
+        if not target_app_id or not target_app_secret:
+            raise ValueError("META_APP_ID and META_APP_SECRET must be configured to exchange Embedded Signup OAuth code.")
+
+        url = f"https://graph.facebook.com/{self.api_version}/oauth/access_token"
+
+        # Build list of redirect_uri candidates to try in order.
+        # FB.login() popup flows typically bind to "" (empty) or omitted.
+        # We also try the Cloudflare/frontend URL as a fallback.
+        candidates: list[Optional[str]] = []
+
+        # 1. Explicitly provided redirect_uri from the caller
+        if redirect_uri and redirect_uri.strip():
+            r = redirect_uri.strip()
+            candidates.append(r)
+            candidates.append(r.rstrip("/") + "/" if not r.endswith("/") else r.rstrip("/"))
+
+        # 2. Configured META_REDIRECT_URI override
+        env_uri = (settings.META_REDIRECT_URI or "").strip()
+        if env_uri and env_uri not in candidates:
+            candidates.append(env_uri)
+            candidates.append(env_uri.rstrip("/") + "/" if not env_uri.endswith("/") else env_uri.rstrip("/"))
+
+        # 3. Empty string — standard for FB JS SDK popup (most common)
+        if "" not in candidates:
+            candidates.append("")
+
+        # 4. None — completely omit redirect_uri param
+        if None not in candidates:
+            candidates.append(None)
+
+        # 5. Frontend URL from config (Cloudflare tunnel or production domain)
+        frontend_url = (settings.FRONTEND_URL or "").strip()
+        for fu in [frontend_url, frontend_url.rstrip("/") + "/" if frontend_url and not frontend_url.endswith("/") else None]:
+            if fu and fu not in candidates:
+                candidates.append(fu)
+
+        # 6. Common localhost fallbacks for dev
+        for local in [
+            "http://localhost:3010", "http://localhost:3010/",
+            "http://localhost:3000", "http://localhost:3000/",
+            "http://localhost:5173", "http://localhost:5173/",
+        ]:
+            if local not in candidates:
+                candidates.append(local)
+
+        last_error = "Unknown error during token exchange"
+        last_meta_error: Dict[str, Any] = {}
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            for candidate in candidates:
+                params: Dict[str, Any] = {
+                    "client_id": target_app_id,
+                    "client_secret": target_app_secret,
+                    "code": code.strip()
+                }
+                if candidate is not None:
+                    params["redirect_uri"] = candidate
+
+                label = "<omitted>" if candidate is None else f'"{candidate}"'
+                logger.info(f"[WhatsAppService] Trying token exchange with redirect_uri={label}")
+
+                try:
+                    response = await client.get(url, params=params)
+                    data = response.json()
+
+                    if response.status_code == 200 and "access_token" in data:
+                        logger.info(f"[WhatsAppService] Token exchange succeeded with redirect_uri={label}")
+                        return {
+                            "success": True,
+                            "access_token": data.get("access_token"),
+                            "token_type": data.get("token_type", "bearer"),
+                            "expires_in": data.get("expires_in"),
+                            "used_redirect_uri": candidate
+                        }
+
+                    last_meta_error = data.get("error", {})
+                    last_error = last_meta_error.get("message") or f"HTTP {response.status_code}"
+                    logger.warning(f"[WhatsAppService] Token exchange failed with redirect_uri={label}: {last_error}")
+
+                    # Only continue cycling if the error is redirect_uri-related
+                    error_lower = last_error.lower()
+                    if "redirect_uri" not in error_lower and "verification code" not in error_lower:
+                        logger.error(f"[WhatsAppService] Non-redirect_uri error — stopping retry: {last_error}")
+                        break
+
+                except Exception as ex:
+                    logger.error(f"[WhatsAppService] Network error during token exchange: {str(ex)}")
+                    last_error = str(ex)
+                    break
+
+        logger.error(f"[WhatsAppService] All redirect_uri candidates exhausted. Last error: {last_error}")
+        return {
+            "success": False,
+            "error": last_error,
+            "meta_error": last_meta_error
+        }
+
+
+    async def debug_token(
+        self,
+        input_token: str,
+        app_id: Optional[str] = None,
+        app_secret: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Inspects an access token using Meta debug_token endpoint.
+        Useful to extract WABA ID from granular_scopes if not received in session postMessage.
+        Endpoint: GET https://graph.facebook.com/{version}/debug_token
+        """
+        target_app_id = (app_id or settings.META_APP_ID or "").strip()
+        target_app_secret = (app_secret or settings.META_APP_SECRET or "").strip()
+        app_access_token = f"{target_app_id}|{target_app_secret}"
+
+        url = f"https://graph.facebook.com/{self.api_version}/debug_token"
+        params = {
+            "input_token": input_token.strip(),
+            "access_token": app_access_token
+        }
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
-                response = await client.delete(url, headers=headers, params=params)
+                response = await client.get(url, params=params)
                 data = response.json()
-                if response.status_code in (200, 201) and data.get("success"):
-                    logger.info(f"[WhatsAppService] Template '{template_name}' deleted from Meta.")
+                if response.status_code == 200 and "data" in data:
+                    return data.get("data", {})
+                logger.warning(f"[WhatsAppService] debug_token returned non-200: {data}")
+                return {}
+            except Exception as ex:
+                logger.error(f"[WhatsAppService] Error debugging token: {str(ex)}")
+                return {}
+
+    async def subscribe_app_to_waba(
+        self,
+        waba_id: str,
+        token: Optional[str] = None
+    ) -> bool:
+        """
+        Subscribes the Meta App to the WhatsApp Business Account for webhook notifications.
+        Endpoint: POST https://graph.facebook.com/{version}/{WABA_ID}/subscribed_apps
+        """
+        auth_token = token or self.access_token
+        url = f"https://graph.facebook.com/{self.api_version}/{waba_id.strip()}/subscribed_apps"
+        headers = {"Authorization": f"Bearer {auth_token}"}
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                response = await client.post(url, headers=headers)
+                data = response.json()
+                if response.status_code == 200 and data.get("success"):
+                    logger.info(f"[WhatsAppService] Successfully subscribed app to WABA {waba_id}")
                     return True
-                logger.warning(f"[WhatsAppService] Could not delete '{template_name}' from Meta: {data}")
+                logger.warning(f"[WhatsAppService] Could not subscribe app to WABA {waba_id}: {data}")
                 return False
             except Exception as ex:
-                logger.error(f"[WhatsAppService] Error deleting template from Meta: {str(ex)}")
+                logger.error(f"[WhatsAppService] Error subscribing app to WABA: {str(ex)}")
                 return False
 
+    async def fetch_waba_phone_numbers(
+        self,
+        waba_id: str,
+        token: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetches registered phone numbers for a given WABA ID.
+        Endpoint: GET https://graph.facebook.com/{version}/{WABA_ID}/phone_numbers
+        """
+        auth_token = token or self.access_token
+        url = f"https://graph.facebook.com/{self.api_version}/{waba_id.strip()}/phone_numbers"
+        headers = {"Authorization": f"Bearer {auth_token}"}
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                response = await client.get(url, headers=headers)
+                data = response.json()
+
+                if response.status_code == 200:
+                    return data.get("data", [])
+                logger.warning(f"[WhatsAppService] Could not fetch phone numbers for WABA {waba_id}: {data}")
+                return []
+            except Exception as ex:
+                logger.error(f"[WhatsAppService] Error fetching WABA phone numbers: {str(ex)}")
+                return []
+
 whatsapp_service = WhatsAppService()
+

@@ -93,9 +93,30 @@ async def handle_whatsapp_events(request: Request, db: AsyncSession = Depends(ge
 
                     await db.commit()
 
-            # Handle template review status updates
+            # Handle Coexistence Webhook Fields
             field = change.get("field")
-            if field == "message_template_status_update":
+            
+            # 1. Echoes of messages sent from WhatsApp Business App on phone
+            if field == "smb_message_echoes":
+                echo_messages = value.get("messages", [])
+                for echo in echo_messages:
+                    echo_id = echo.get("id")
+                    recipient = echo.get("to") or echo.get("recipient_id")
+                    logger.info(f"[Webhook Coexistence] Phone App Echo message sent to '{recipient}' (ID: {echo_id})")
+
+            # 2. WhatsApp Business App History Sync events
+            elif field == "history":
+                history_data = value.get("history", {}) or value
+                phase = history_data.get("phase") or "sync"
+                logger.info(f"[Webhook Coexistence] History sync event received: phase={phase}")
+
+            # 3. WhatsApp Business App State Sync (Labels, Profile, State)
+            elif field == "smb_app_state_sync":
+                state_data = value.get("sync_state") or value
+                logger.info(f"[Webhook Coexistence] App state sync event received: {state_data}")
+
+            # 4. Handle template review status updates
+            elif field == "message_template_status_update":
                 template_id = value.get("message_template_id")
                 template_name = value.get("message_template_name")
                 event = value.get("event", "").upper()  # APPROVED, REJECTED, PAUSED, PENDING
@@ -120,3 +141,4 @@ async def handle_whatsapp_events(request: Request, db: AsyncSession = Depends(ge
                     logger.info(f"[Webhook] Updated DB template '{template_name}' status to '{mapped_status}'")
 
     return {"status": "ok"}
+

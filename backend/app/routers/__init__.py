@@ -6,6 +6,7 @@ from app.routers.campaigns import router as campaigns_router
 from app.routers.message_logs import router as message_logs_router
 from app.routers.messages import router as messages_router
 from app.routers.webhooks import router as webhooks_router
+from app.routers.whatsapp_auth import router as whatsapp_auth_router
 
 __all__ = [
     "health_router",
@@ -15,5 +16,6 @@ __all__ = [
     "campaigns_router",
     "message_logs_router",
     "messages_router",
-    "webhooks_router"
+    "webhooks_router",
+    "whatsapp_auth_router"
 ]

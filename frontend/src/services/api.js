@@ -184,4 +184,35 @@ export const api = {
     });
     return handleResponse(res);
   },
+
+  // WhatsApp Embedded Signup
+  async getWhatsAppEmbeddedConfig() {
+    const res = await fetch(`${API_BASE}/api/whatsapp/embedded-signup/config`);
+    return handleResponse(res);
+  },
+
+  async exchangeWhatsAppSignupCode(data) {
+    const res = await fetch(`${API_BASE}/api/whatsapp/embedded-signup/exchange-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async saveWhatsAppCredentials(data) {
+    const res = await fetch(`${API_BASE}/api/whatsapp/embedded-signup/save-credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async disconnectWhatsApp() {
+    const res = await fetch(`${API_BASE}/api/whatsapp/embedded-signup/disconnect`, {
+      method: 'POST',
+    });
+    return handleResponse(res);
+  },
 };

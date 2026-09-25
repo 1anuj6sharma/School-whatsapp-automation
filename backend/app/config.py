@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     WHATSAPP_VERIFY_TOKEN: str = Field(default="school_whatsapp_verify_token_secret_123", description="Webhook Verification Token")
     WHATSAPP_MAX_CONCURRENCY: int = Field(default=5, description="Maximum concurrent WhatsApp sending requests")
 
+    # Meta Embedded Signup & App OAuth Credentials
+    META_APP_ID: str = Field(default="", description="Meta App ID for Embedded Signup / Facebook JS SDK")
+    META_APP_SECRET: str = Field(default="", description="Meta App Secret for server-side OAuth code exchange")
+    META_CONFIG_ID: str = Field(default="", description="Optional Meta Embedded Signup Configuration ID")
+    META_REDIRECT_URI: str = Field(default="", description="Optional explicit redirect_uri to use during OAuth code exchange")
+    FRONTEND_URL: str = Field(default="http://localhost:3010", description="Frontend base URL (used as redirect_uri fallback)")
+
     # Database Settings: Supports individual parameters or full DATABASE_URL
     DB_TYPE: str = Field(default="sqlite", description="mssql | postgres | sqlite")
     DB_HOST: str | None = Field(default=None, description="Database host (e.g. localhost, 127.0.0.1)")

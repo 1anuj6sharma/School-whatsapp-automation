@@ -14,7 +14,8 @@ from app.routers import (
     campaigns_router,
     message_logs_router,
     messages_router,
-    webhooks_router
+    webhooks_router,
+    whatsapp_auth_router
 )
 
 from app.services.campaign_service import campaign_service
@@ -57,6 +58,7 @@ app.include_router(campaigns_router)
 app.include_router(message_logs_router)
 app.include_router(messages_router)
 app.include_router(webhooks_router)
+app.include_router(whatsapp_auth_router)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

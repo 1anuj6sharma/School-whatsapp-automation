@@ -109,6 +109,14 @@ export const api = {
     return handleResponse(res);
   },
 
+  async importStudents(formData) {
+    const res = await fetch(`${API_BASE}/api/students/import-csv`, {
+      method: 'POST',
+      body: formData,
+    });
+    return handleResponse(res);
+  },
+
   // Templates
   async getTemplates() {
     const res = await fetch(`${API_BASE}/api/templates`);

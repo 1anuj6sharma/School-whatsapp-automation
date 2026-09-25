@@ -45,15 +45,18 @@ export const SettingsPage = ({ showToast }) => {
   }, []);
 
   const handleCopy = async (text, key) => {
-    if (!text) {
-      showToast({ type: 'warning', title: 'Nothing to copy' });
+    const textToCopy = String(text || '').trim();
+    if (!textToCopy || textToCopy === 'Loading...' || textToCopy === 'Not Configured') {
+      if (typeof showToast === 'function') {
+        showToast({ type: 'warning', title: 'Nothing to copy' });
+      }
       return;
     }
 
     let copied = false;
     try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
+      if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(textToCopy);
         copied = true;
       }
     } catch {
@@ -63,29 +66,36 @@ export const SettingsPage = ({ showToast }) => {
     if (!copied) {
       try {
         const textArea = document.createElement('textarea');
-        textArea.value = text;
+        textArea.value = textToCopy;
         textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
+        textArea.style.left = '0';
+        textArea.style.top = '0';
+        textArea.style.opacity = '0';
+        textArea.style.pointerEvents = 'none';
         textArea.setAttribute('readonly', '');
         document.body.appendChild(textArea);
+        textArea.focus();
         textArea.select();
-        textArea.setSelectionRange(0, 99999);
+        textArea.setSelectionRange(0, textToCopy.length);
         copied = document.execCommand('copy');
         document.body.removeChild(textArea);
       } catch (e) {
-        console.error('Copy fallback failed', e);
+        console.error('Fallback copy failed', e);
       }
     }
 
     if (copied) {
       setCopiedKey(key);
-      showToast({ type: 'success', title: 'Copied to clipboard' });
+      if (typeof showToast === 'function') {
+        showToast({ type: 'success', title: 'Copied to clipboard', message: `${key.replace('_', ' ').toUpperCase()} copied!` });
+      }
       setTimeout(() => {
         setCopiedKey(null);
       }, 2000);
     } else {
-      showToast({ type: 'error', title: 'Could not copy', message: 'Please copy manually.' });
+      if (typeof showToast === 'function') {
+        showToast({ type: 'error', title: 'Could not copy', message: 'Please copy manually.' });
+      }
     }
   };
 

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Users, UserPlus, Search, Edit2, Trash2, CheckCircle2, XCircle } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
+import { Users, UserPlus, Search, Edit2, Trash2, CheckCircle2, XCircle, FileSpreadsheet, UploadCloud, FileText, Info } from 'lucide-react';
 import { api } from '../services/api';
 import { Modal } from '../components/Modal';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -19,6 +19,13 @@ export const StudentsPage = ({ showToast }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  // Import states
+  const [importFile, setImportFile] = useState(null);
+  const [importClassId, setImportClassId] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef(null);
 
   // Form states
   const [editingStudent, setEditingStudent] = useState(null);
@@ -175,6 +182,46 @@ export const StudentsPage = ({ showToast }) => {
     }
   };
 
+  const handleImportSubmit = async (e) => {
+    e.preventDefault();
+    if (!importFile) {
+      if (showToast) showToast({ type: 'warning', title: 'Please select an Excel or CSV file' });
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile);
+      if (importClassId) {
+        formData.append('class_id', importClassId);
+      }
+
+      const result = await api.importStudents(formData);
+      if (showToast) {
+        showToast({
+          type: 'success',
+          title: 'Import Complete!',
+          message: result.message || `Successfully imported ${result.imported_count} students.`,
+        });
+      }
+      setShowImportModal(false);
+      setImportFile(null);
+      setImportClassId('');
+      fetchData();
+    } catch (err) {
+      if (showToast) {
+        showToast({
+          type: 'error',
+          title: 'Import Failed',
+          message: err instanceof Error ? err.message : 'Failed to parse and import spreadsheet.',
+        });
+      }
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fade-in pb-12">
       {/* Header */}
@@ -185,17 +232,31 @@ export const StudentsPage = ({ showToast }) => {
             <span>Student Management</span>
           </h2>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Manage student phone records and WhatsApp consent status.
+            Manage student phone records, WhatsApp consent, and import student rosters.
           </p>
         </div>
 
-        <button
-          onClick={openAddModal}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95 self-start sm:self-auto w-full sm:w-auto"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Add Student</span>
-        </button>
+        <div className="flex items-center gap-2.5 self-start sm:self-auto w-full sm:w-auto">
+          <button
+            onClick={() => {
+              setImportFile(null);
+              setImportClassId('');
+              setShowImportModal(true);
+            }}
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold border border-slate-300 shadow-xs transition-all active:scale-95 flex-1 sm:flex-initial cursor-pointer"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            <span>Import Excel / CSV</span>
+          </button>
+
+          <button
+            onClick={openAddModal}
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95 flex-1 sm:flex-initial cursor-pointer"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Add Student</span>
+          </button>
+        </div>
       </div>
 
       {/* Filters & Search */}
@@ -535,6 +596,148 @@ export const StudentsPage = ({ showToast }) => {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* Import Excel / CSV Modal */}
+      <Modal
+        isOpen={showImportModal}
+        onClose={() => {
+          if (!isImporting) {
+            setShowImportModal(false);
+            setImportFile(null);
+          }
+        }}
+        title="Import Students from Excel / CSV"
+      >
+        <form onSubmit={handleImportSubmit} className="space-y-4">
+          <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-xl space-y-1.5 text-xs">
+            <div className="flex items-center gap-2 font-bold text-emerald-900">
+              <Info className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Smart Class Detection &amp; Auto-Creation</span>
+            </div>
+            <p className="text-emerald-800 text-[11px] leading-relaxed">
+              If your Excel or CSV sheet contains a <code className="font-mono bg-emerald-100/70 px-1 py-0.5 rounded font-bold">Class</code> or <code className="font-mono bg-emerald-100/70 px-1 py-0.5 rounded font-bold">Grade</code> column, students will be placed into their respective classes. Any class that does not exist in the database will be <strong>created automatically</strong>!
+            </p>
+          </div>
+
+          {/* File Selector Dropzone */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              Select Excel or CSV Spreadsheet *
+            </label>
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept=".xlsx,.xls,.csv"
+              required
+              onChange={(e) => {
+                if (e.target.files && e.target.files[0]) {
+                  setImportFile(e.target.files[0]);
+                }
+              }}
+              className="hidden"
+            />
+
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer transition-all ${
+                importFile
+                  ? 'border-emerald-500 bg-emerald-50/40'
+                  : 'border-slate-300 hover:border-emerald-500 bg-slate-50/60 hover:bg-emerald-50/20'
+              }`}
+            >
+              {importFile ? (
+                <div className="space-y-1.5">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto shadow-xs">
+                    <FileSpreadsheet className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-bold text-slate-900 truncate max-w-xs mx-auto">
+                    {importFile.name}
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    {(importFile.size / 1024).toFixed(1)} KB &bull; Click to change file
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center mx-auto shadow-xs">
+                    <UploadCloud className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-bold text-slate-800">
+                    Click to browse or drag and drop spreadsheet
+                  </p>
+                  <p className="text-[10px] text-slate-400">
+                    Supports Microsoft Excel (.xlsx, .xls) and CSV (.csv)
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Fallback Class Selector */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Class Assignment Option
+            </label>
+            <select
+              value={importClassId}
+              onChange={(e) => setImportClassId(e.target.value)}
+              className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs"
+            >
+              <option value="">✨ Auto-detect &amp; Create Classes from Spreadsheet Columns</option>
+              {classes.map((c) => (
+                <option key={c.id} value={c.id}>
+                  Force Assign All to: {c.name} {c.section ? `(${c.section})` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-slate-400 mt-1">
+              Leave on Auto-detect to create or map classes directly from the sheet columns.
+            </p>
+          </div>
+
+          {/* Required Columns Guide */}
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-[11px] space-y-1">
+            <span className="font-bold text-slate-700 block">Supported Column Headers:</span>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-slate-600 font-mono text-[10px]">
+              <div>&bull; <span className="font-bold text-slate-800">Student Name</span> (Required)</div>
+              <div>&bull; <span className="font-bold text-slate-800">WhatsApp / Phone</span> (Required)</div>
+              <div>&bull; <span className="text-slate-600">Parent Name</span> (Optional)</div>
+              <div>&bull; <span className="text-emerald-700 font-bold">Class / Grade</span> (Auto-created!)</div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+            <button
+              type="button"
+              disabled={isImporting}
+              onClick={() => {
+                setShowImportModal(false);
+                setImportFile(null);
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isImporting || !importFile}
+              className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 shadow-sm transition-all active:scale-95 flex items-center gap-2 cursor-pointer"
+            >
+              {isImporting ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Importing Spreadsheet...</span>
+                </>
+              ) : (
+                <>
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Import Students</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

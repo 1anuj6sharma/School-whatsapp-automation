@@ -1,36 +1,51 @@
 import asyncio
 import re
+from typing import Dict, Any, List, Optional
 import httpx
-from typing import Any, Dict, List, Optional
-from app.config import settings
-from app.utils.logger import logger
-from app.utils.phone import sanitize_phone_number, mask_phone_number
+from django.conf import settings
+from api.utils.logger import logger
+from api.utils.phone import sanitize_phone_number, mask_phone_number
 
 class WhatsAppService:
-    def __init__(
-        self,
-        phone_number_id: Optional[str] = None,
-        waba_id: Optional[str] = None,
-        access_token: Optional[str] = None,
-        api_version: Optional[str] = None,
-        timeout: float = 10.0
-    ):
-        self.phone_number_id = phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
-        self.waba_id = waba_id or settings.WHATSAPP_BUSINESS_ACCOUNT_ID
-        self.access_token = access_token or settings.WHATSAPP_ACCESS_TOKEN
-        self.api_version = api_version or settings.WHATSAPP_API_VERSION
-        self.timeout = timeout
-        self.base_url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
+    def __init__(self):
+        self.phone_number_id = settings.WHATSAPP_PHONE_NUMBER_ID
+        self.business_account_id = settings.WHATSAPP_BUSINESS_ACCOUNT_ID
+        self.access_token = settings.WHATSAPP_ACCESS_TOKEN
+        self.api_version = settings.WHATSAPP_API_VERSION
+        self.timeout = 30.0
 
-    def validate_configuration(self) -> tuple[bool, str]:
-        if not self.phone_number_id:
-            return False, "WHATSAPP_PHONE_NUMBER_ID is not configured in environment."
-        if not self.access_token:
-            return False, "WHATSAPP_ACCESS_TOKEN is not configured in environment."
-        return True, ""
+    @property
+    def base_url(self) -> str:
+        phone_id = self.get_phone_number_id()
+        return f"https://graph.facebook.com/{self.api_version}/{phone_id}/messages"
+
+    def get_phone_number_id(self) -> str:
+        return (self.phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID or "").strip()
 
     def get_waba_id(self) -> str:
-        return (self.waba_id or settings.WHATSAPP_BUSINESS_ACCOUNT_ID or "").strip()
+        return (self.business_account_id or settings.WHATSAPP_BUSINESS_ACCOUNT_ID or "").strip()
+
+    def get_access_token(self) -> str:
+        return (self.access_token or settings.WHATSAPP_ACCESS_TOKEN or "").strip()
+
+    def update_credentials(
+        self,
+        phone_number_id: Optional[str] = None,
+        business_account_id: Optional[str] = None,
+        access_token: Optional[str] = None,
+    ):
+        if phone_number_id:
+            self.phone_number_id = phone_number_id.strip()
+        if business_account_id:
+            self.business_account_id = business_account_id.strip()
+        if access_token:
+            self.access_token = access_token.strip()
+        logger.info(
+            f"[WhatsAppService] Credentials updated: Phone ID={self.phone_number_id}, WABA ID={self.business_account_id}, Token Configured={bool(self.access_token)}"
+        )
+
+    def is_configured(self) -> bool:
+        return bool(self.get_phone_number_id() and self.get_access_token())
 
     async def send_template_message(
         self,
@@ -38,49 +53,44 @@ class WhatsAppService:
         template_name: str,
         language_code: str = "en_US",
         parameters: Optional[List[str]] = None,
-        max_retries: int = 3
+        max_retries: int = 3,
     ) -> Dict[str, Any]:
-        """
-        Sends a template message via Meta WhatsApp Cloud API.
-        Uses httpx with exponential backoff on 429 rate limits or transient 5xx errors.
-        """
-        valid, err_msg = self.validate_configuration()
-        if not valid:
-            logger.error(f"[WhatsAppService] Configuration error: {err_msg}")
+        phone_id = self.get_phone_number_id()
+        token = self.get_access_token()
+
+        if not phone_id or not token:
+            err_msg = "Meta WhatsApp credentials not configured. Please set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN."
+            logger.error(f"[WhatsAppService] {err_msg}")
             return {
                 "success": False,
                 "error": err_msg,
-                "meta_error": {"type": "ConfigurationError", "message": err_msg}
+                "meta_error": {"type": "ConfigurationError", "message": err_msg},
             }
 
         sanitized_recipient = sanitize_phone_number(recipient_number)
         masked = mask_phone_number(sanitized_recipient)
 
-        # Build payload according to Meta Cloud API specification
         payload: Dict[str, Any] = {
             "messaging_product": "whatsapp",
             "to": sanitized_recipient,
             "type": "template",
             "template": {
                 "name": template_name,
-                "language": {
-                    "code": language_code
-                }
-            }
+                "language": {"code": language_code},
+            },
         }
 
-        # If dynamic parameters are supplied for parameterized templates
         if parameters and len(parameters) > 0:
             payload["template"]["components"] = [
                 {
                     "type": "body",
-                    "parameters": [{"type": "text", "text": str(p)} for p in parameters]
+                    "parameters": [{"type": "text", "text": str(p)} for p in parameters],
                 }
             ]
 
         headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
         }
 
         retry_count = 0
@@ -93,19 +103,13 @@ class WhatsAppService:
                         f"[WhatsAppService] Sending template '{template_name}' to {masked} (attempt {retry_count + 1}/{max_retries + 1})"
                     )
 
-                    response = await client.post(
-                        self.base_url,
-                        headers=headers,
-                        json=payload
-                    )
-
+                    response = await client.post(self.base_url, headers=headers, json=payload)
                     response_json = {}
                     try:
                         response_json = response.json()
                     except Exception:
                         response_json = {"raw_text": response.text}
 
-                    # Handle Success (200 OK)
                     if response.status_code in (200, 201):
                         messages = response_json.get("messages", [])
                         message_id = messages[0].get("id") if messages else None
@@ -119,73 +123,66 @@ class WhatsAppService:
                             "success": True,
                             "message_id": message_id,
                             "recipient": wa_id,
-                            "response_data": response_json
+                            "response_data": response_json,
                         }
 
-                    # Handle 429 Rate Limiting or 5xx Server Error with exponential backoff
                     if response.status_code in (429, 500, 502, 503, 504) and retry_count < max_retries:
                         retry_count += 1
                         logger.warning(
-                            f"[WhatsAppService] Received HTTP {response.status_code} from Meta for {masked}. Retrying in {backoff_delay}s..."
+                            f"[WhatsAppService] HTTP {response.status_code} for {masked}. Retrying in {backoff_delay}s..."
                         )
                         await asyncio.sleep(backoff_delay)
                         backoff_delay *= 2
                         continue
 
-                    # Extract Meta API specific error structure safely
                     meta_error = response_json.get("error", {})
                     error_message = (
-                        meta_error.get("message") or
-                        meta_error.get("error_user_msg") or
-                        f"Meta API error (HTTP {response.status_code})"
+                        meta_error.get("message")
+                        or meta_error.get("error_user_msg")
+                        or f"Meta API error (HTTP {response.status_code})"
                     )
-
-                    logger.error(
-                        f"[WhatsAppService] Failed to send message to {masked} (HTTP {response.status_code}): {error_message}"
-                    )
+                    logger.error(f"[WhatsAppService] Meta API rejected message for {masked}: {error_message}")
                     return {
                         "success": False,
                         "error": error_message,
+                        "meta_error": meta_error,
                         "status_code": response.status_code,
-                        "meta_error": meta_error
                     }
 
-                except httpx.TimeoutException:
-                    logger.error(f"[WhatsAppService] Request timed out connecting to Meta API for {masked}")
-                    return {
-                        "success": False,
-                        "error": "Request to Meta WhatsApp API timed out.",
-                        "meta_error": {"type": "TimeoutError"}
-                    }
-                except httpx.RequestError as req_err:
-                    logger.error(f"[WhatsAppService] Network/DNS connection error for {masked}: {req_err}")
-                    return {
-                        "success": False,
-                        "error": f"Network/DNS error connecting to Meta: {str(req_err)}",
-                        "meta_error": {"type": "NetworkError", "detail": str(req_err)}
-                    }
+                except httpx.RequestError as ex:
+                    retry_count += 1
+                    logger.warning(f"[WhatsAppService] Network error sending to {masked}: {str(ex)}")
+                    if retry_count <= max_retries:
+                        await asyncio.sleep(backoff_delay)
+                        backoff_delay *= 2
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"Network communication failure: {str(ex)}",
+                            "meta_error": {"type": "NetworkError", "detail": str(ex)},
+                        }
                 except Exception as ex:
-                    logger.error(f"[WhatsAppService] Unexpected error sending message to {masked}: {str(ex)}")
+                    logger.error(f"[WhatsAppService] Exception sending to {masked}: {str(ex)}")
                     return {
                         "success": False,
                         "error": f"Internal communication error: {str(ex)}",
-                        "meta_error": {"type": type(ex).__name__}
+                        "meta_error": {"type": type(ex).__name__},
                     }
 
         return {
             "success": False,
             "error": "Failed after maximum retries.",
-            "meta_error": {"type": "MaxRetriesExceeded"}
+            "meta_error": {"type": "MaxRetriesExceeded"},
         }
 
     async def fetch_templates_from_meta(self) -> List[Dict[str, Any]]:
-        """
-        Fetches all message templates directly from Meta WhatsApp Business Account (WABA).
-        Endpoint: GET https://graph.facebook.com/{version}/{WABA_ID}/message_templates
-        """
         waba_id = self.get_waba_id()
+        token = self.get_access_token()
+        if not waba_id or not token:
+            raise RuntimeError("WHATSAPP_BUSINESS_ACCOUNT_ID or WHATSAPP_ACCESS_TOKEN is not configured.")
+
         url = f"https://graph.facebook.com/{self.api_version}/{waba_id}/message_templates?limit=100"
-        headers = {"Authorization": f"Bearer {self.access_token}"}
+        headers = {"Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
@@ -206,10 +203,8 @@ class WhatsAppService:
                     category = item.get("category", "UTILITY")
                     language = item.get("language", "en_US")
                     meta_status = item.get("status", "PENDING").upper()
-                    
-                    # Normalize Meta status (APPROVED -> ACTIVE, PENDING -> PENDING, REJECTED -> REJECTED)
                     status = "ACTIVE" if meta_status == "APPROVED" else meta_status
-                    
+
                     components = item.get("components", [])
                     body_text = ""
                     for comp in components:
@@ -225,7 +220,7 @@ class WhatsAppService:
                         "raw_status": meta_status,
                         "body_preview": body_text or f"Template '{name}' from Meta WhatsApp Manager.",
                         "description": f"Meta {category.title()} Template ({language})",
-                        "meta_id": item.get("id")
+                        "meta_id": item.get("id"),
                     })
 
                 logger.info(f"[WhatsAppService] Successfully fetched {len(parsed_templates)} templates from Meta.")
@@ -240,44 +235,36 @@ class WhatsAppService:
         category: str,
         language: str,
         body_text: str,
-        sample_values: Optional[List[str]] = None
+        sample_values: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """
-        Submits a new message template directly to Meta WhatsApp Business Account for review.
-        Endpoint: POST https://graph.facebook.com/{version}/{WABA_ID}/message_templates
-        """
         waba_id = self.get_waba_id()
+        token = self.get_access_token()
+        if not waba_id or not token:
+            raise RuntimeError("WHATSAPP_BUSINESS_ACCOUNT_ID or WHATSAPP_ACCESS_TOKEN is not configured.")
+
         url = f"https://graph.facebook.com/{self.api_version}/{waba_id}/message_templates"
         headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
         }
 
-        # Clean name: lowercase alphanumeric and underscores only
         clean_name = re.sub(r"[^a-z0-9_]", "_", name.lower().strip())
-
-        # Build components
         body_component: Dict[str, Any] = {
             "type": "BODY",
-            "text": body_text.strip()
+            "text": body_text.strip(),
         }
 
-        # Check for placeholders {{1}}, {{2}} in text
         placeholders = re.findall(r"\{\{(\d+)\}\}", body_text)
         if placeholders:
-            # Meta requires sample values for each placeholder
             if not sample_values or len(sample_values) < len(placeholders):
-                # Provide reasonable default sample values if none given
                 sample_values = [f"Sample_{i}" for i in range(1, len(placeholders) + 1)]
-            body_component["example"] = {
-                "body_text": [sample_values]
-            }
+            body_component["example"] = {"body_text": [sample_values]}
 
         payload = {
             "name": clean_name,
             "category": category.upper(),
             "language": language,
-            "components": [body_component]
+            "components": [body_component],
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -297,14 +284,14 @@ class WhatsAppService:
                     logger.error(f"[WhatsAppService] Meta rejected template creation. Full response: {data}")
                     raise ValueError(full_error)
 
-                logger.info(f"[WhatsAppService] Template '{clean_name}' created on Meta successfully: ID {data.get('id')}")
+                logger.info(f"[WhatsAppService] Template '{clean_name}' created on Meta: ID {data.get('id')}")
                 return {
                     "meta_id": data.get("id"),
                     "name": clean_name,
                     "status": data.get("status", "PENDING").upper(),
                     "category": category.upper(),
                     "language": language,
-                    "body_preview": body_text.strip()
+                    "body_preview": body_text.strip(),
                 }
             except ValueError:
                 raise
@@ -313,13 +300,10 @@ class WhatsAppService:
                 raise RuntimeError(f"Failed to communicate with Meta API: {str(ex)}")
 
     async def delete_template_on_meta(self, template_name: str) -> bool:
-        """
-        Deletes a template from Meta WhatsApp Business Account.
-        Endpoint: DELETE https://graph.facebook.com/{version}/{WABA_ID}/message_templates?name={template_name}
-        """
         waba_id = self.get_waba_id()
+        token = self.get_access_token()
         url = f"https://graph.facebook.com/{self.api_version}/{waba_id}/message_templates"
-        headers = {"Authorization": f"Bearer {self.access_token}"}
+        headers = {"Authorization": f"Bearer {token}"}
         params = {"name": template_name}
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:

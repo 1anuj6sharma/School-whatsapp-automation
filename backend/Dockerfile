@@ -30,8 +30,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source code
 COPY . .
 
-# Expose FastAPI port
+# Expose backend port
 EXPOSE 3010
 
-# Run FastAPI server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3010"]
+# Run database migrations and start server
+CMD ["sh", "-c", "python manage.py migrate && python -m uvicorn school_whatsapp.asgi:application --host 0.0.0.0 --port 3010 --lifespan off"]

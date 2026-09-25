@@ -1,4 +1,24 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: school_whatsapp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-school_whatsapp}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-school_whatsapp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - school_net
+
   backend:
     build:
       context: ./backend
@@ -16,6 +36,9 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - school_net
 
@@ -31,6 +54,10 @@ services:
       - backend
     networks:
       - school_net
+
+volumes:
+  postgres_data:
+    driver: local
 
 networks:
   school_net:

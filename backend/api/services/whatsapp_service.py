@@ -297,25 +297,41 @@ class WhatsAppService:
         # Only add header parameter if template is configured for a header
         if (tpl_header_type != "NONE" and tpl_header_type != "TEXT") and header_image_url and header_image_url.strip():
             raw_url = header_image_url.strip()
-            media_id = await self._resolve_image_media_id(raw_url)
-            if media_id:
+
+            if raw_url.isdigit() and len(raw_url) > 10:
+                # Direct media ID provided
                 components.append({
                     "type": "header",
-                    "parameters": [{"type": "image", "image": {"id": media_id}}]
+                    "parameters": [{"type": "image", "image": {"id": raw_url}}]
                 })
-            elif raw_url.startswith("https://") and "localhost" not in raw_url:
+            elif raw_url.startswith("https://") and "localhost" not in raw_url and "127.0.0.1" not in raw_url:
+                # Public HTTPS URL (e.g. Cloudflare tunnel, CDN, S3) - preferred by Meta for templates
+                logger.info(f"[WhatsAppService] Using direct public HTTPS link for template image header: {raw_url}")
                 components.append({
                     "type": "header",
                     "parameters": [{"type": "image", "image": {"link": raw_url}}]
                 })
             else:
-                err_msg = f"Could not resolve or upload image header for '{raw_url}'."
-                logger.error(f"[WhatsAppService] {err_msg}")
-                return {
-                    "success": False,
-                    "error": err_msg,
-                    "meta_error": {"type": "MediaError", "message": err_msg},
-                }
+                # Local file or localhost URL - upload directly to Meta to obtain media_id
+                media_id = await self._resolve_image_media_id(raw_url)
+                if media_id:
+                    components.append({
+                        "type": "header",
+                        "parameters": [{"type": "image", "image": {"id": media_id}}]
+                    })
+                elif raw_url.startswith("https://"):
+                    components.append({
+                        "type": "header",
+                        "parameters": [{"type": "image", "image": {"link": raw_url}}]
+                    })
+                else:
+                    err_msg = f"Could not resolve or upload image header for '{raw_url}'."
+                    logger.error(f"[WhatsAppService] {err_msg}")
+                    return {
+                        "success": False,
+                        "error": err_msg,
+                        "meta_error": {"type": "MediaError", "message": err_msg},
+                    }
         elif (tpl_header_type == "TEXT" or not tpl_header_type) and header_text and header_text.strip():
             components.append({
                 "type": "header",

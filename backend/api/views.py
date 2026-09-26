@@ -107,12 +107,17 @@ class ClassDetailView(APIView):
 class StudentListCreateView(APIView):
     def get(self, request):
         class_id = request.query_params.get("class_id")
+        class_ids = request.query_params.get("class_ids")
         search = request.query_params.get("search")
         opt_in = request.query_params.get("opt_in")
 
         qs = Student.objects.select_related("school_class").order_by("student_name")
 
-        if class_id is not None and class_id != "":
+        if class_ids:
+            c_list = [int(x) for x in class_ids.split(",") if x.strip().isdigit()]
+            if c_list:
+                qs = qs.filter(school_class_id__in=c_list)
+        elif class_id is not None and class_id != "":
             qs = qs.filter(school_class_id=class_id)
         if opt_in is not None and opt_in != "":
             qs = qs.filter(whatsapp_opt_in=(opt_in.lower() == "true"))
@@ -214,6 +219,7 @@ class StudentImportCSVView(APIView):
         parent_col = next((c for c in df.columns if "parent" in c or "father" in c or "guardian" in c), None)
         class_col = next((c for c in df.columns if "class" in c or "grade" in c or "standard" in c), None)
         section_col = next((c for c in df.columns if "section" in c or "sec" in c), None)
+        fees_col = next((c for c in df.columns if any(k in c for k in ["fee", "dues", "amount", "due", "pending", "balance"])), None)
 
         if not name_col or not phone_col:
             return Response(
@@ -222,6 +228,7 @@ class StudentImportCSVView(APIView):
             )
 
         created_count = 0
+        updated_count = 0
         skipped_count = 0
         classes_created = 0
         classes_cache = {}
@@ -240,6 +247,15 @@ class StudentImportCSVView(APIView):
             if not validate_phone_number(cleaned_phone):
                 skipped_count += 1
                 continue
+
+            # Parse Fees Due if provided in spreadsheet
+            fees_val = 0.00
+            if fees_col and str(row.get(fees_col, "")).strip() and str(row.get(fees_col, "")).strip().lower() != "nan":
+                raw_fees = str(row.get(fees_col, "")).replace("₹", "").replace("$", "").replace(",", "").strip()
+                try:
+                    fees_val = float(raw_fees)
+                except ValueError:
+                    fees_val = 0.00
 
             # Resolve Class
             target_class = None
@@ -261,32 +277,63 @@ class StudentImportCSVView(APIView):
             elif default_class:
                 target_class = default_class
             else:
-                # Fallback to default class
                 target_class, created_flag = Class.objects.get_or_create(name="General", defaults={"section": "A"})
                 if created_flag:
                     classes_created += 1
 
-            students_to_create.append(
-                Student(
-                    school_class=target_class,
-                    student_name=name_val,
-                    parent_name=parent_val if parent_val and parent_val.lower() != "nan" else None,
-                    whatsapp_number=cleaned_phone,
-                    whatsapp_opt_in=True,
+            # Check if student already exists (upsert / update detail)
+            existing_student = Student.objects.filter(
+                school_class=target_class,
+                whatsapp_number=cleaned_phone
+            ).first() or Student.objects.filter(
+                whatsapp_number=cleaned_phone,
+                student_name__iexact=name_val
+            ).first()
+
+            if existing_student:
+                changed = False
+                if existing_student.student_name != name_val:
+                    existing_student.student_name = name_val
+                    changed = True
+                if parent_val and parent_val.lower() != "nan" and existing_student.parent_name != parent_val:
+                    existing_student.parent_name = parent_val
+                    changed = True
+                if fees_col and float(existing_student.fees_due or 0.0) != float(fees_val):
+                    existing_student.fees_due = fees_val
+                    changed = True
+                if existing_student.school_class_id != target_class.id:
+                    existing_student.school_class = target_class
+                    changed = True
+
+                if changed:
+                    existing_student.save()
+                    updated_count += 1
+                else:
+                    skipped_count += 1
+            else:
+                students_to_create.append(
+                    Student(
+                        school_class=target_class,
+                        student_name=name_val,
+                        parent_name=parent_val if parent_val and parent_val.lower() != "nan" else None,
+                        whatsapp_number=cleaned_phone,
+                        fees_due=fees_val,
+                        whatsapp_opt_in=True,
+                    )
                 )
-            )
 
         if students_to_create:
             Student.objects.bulk_create(students_to_create)
             created_count = len(students_to_create)
 
-        msg = f"Successfully imported {created_count} students ({skipped_count} skipped)."
+        msg = f"Import complete: {created_count} added, {updated_count} updated ({skipped_count} skipped/unchanged)."
         if classes_created > 0:
             msg += f" Auto-created {classes_created} new class(es)."
 
         return Response({
             "message": msg,
             "imported_count": created_count,
+            "updated_count": updated_count,
             "skipped_count": skipped_count,
             "classes_created_count": classes_created
         })
@@ -447,7 +494,8 @@ class CampaignListCreateView(APIView):
 
         try:
             campaign = campaign_service.create_and_start_campaign(
-                class_id=vdata["class_id"],
+                class_id=vdata.get("class_id"),
+                class_ids=vdata.get("class_ids"),
                 template_id=vdata["template_id"],
                 student_ids=vdata.get("student_ids"),
                 dynamic_parameters=vdata.get("dynamic_parameters"),

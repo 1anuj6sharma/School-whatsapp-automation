@@ -48,6 +48,7 @@ class StudentSerializer(serializers.ModelSerializer):
             "student_name",
             "parent_name",
             "whatsapp_number",
+            "fees_due",
             "whatsapp_opt_in",
             "created_at",
             "updated_at",
@@ -65,6 +66,7 @@ class StudentCreateSerializer(serializers.ModelSerializer):
             "student_name",
             "parent_name",
             "whatsapp_number",
+            "fees_due",
             "whatsapp_opt_in",
         ]
 
@@ -87,6 +89,7 @@ class StudentUpdateSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(required=False)
     parent_name = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     whatsapp_number = serializers.CharField(required=False)
+    fees_due = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     whatsapp_opt_in = serializers.BooleanField(required=False)
 
     class Meta:
@@ -96,6 +99,7 @@ class StudentUpdateSerializer(serializers.ModelSerializer):
             "student_name",
             "parent_name",
             "whatsapp_number",
+            "fees_due",
             "whatsapp_opt_in",
         ]
 
@@ -198,7 +202,8 @@ class CampaignDetailSerializer(CampaignSerializer):
 
 
 class CampaignCreateSerializer(serializers.Serializer):
-    class_id = serializers.IntegerField()
+    class_id = serializers.IntegerField(required=False, allow_null=True)
+    class_ids = serializers.ListField(child=serializers.IntegerField(), required=False, allow_null=True)
     template_id = serializers.IntegerField()
     student_ids = serializers.ListField(child=serializers.IntegerField(), required=False, allow_null=True)
     dynamic_parameters = serializers.ListField(child=serializers.CharField(), required=False, allow_null=True)

@@ -139,7 +139,10 @@ export const api = {
   // Students
   async getStudents(params) {
     const url = new URL(`${window.location.origin}/api/students`);
-    if (params?.class_id !== undefined && params?.class_id !== null) {
+    if (params?.class_ids !== undefined && params?.class_ids !== null) {
+      const cStr = Array.isArray(params.class_ids) ? params.class_ids.join(',') : params.class_ids.toString();
+      url.searchParams.append('class_ids', cStr);
+    } else if (params?.class_id !== undefined && params?.class_id !== null) {
       url.searchParams.append('class_id', params.class_id.toString());
     }
     if (params?.search) {

@@ -27,6 +27,7 @@ class Student(models.Model):
     student_name = models.CharField(max_length=150)
     parent_name = models.CharField(max_length=150, null=True, blank=True)
     whatsapp_number = models.CharField(max_length=20, db_index=True)
+    fees_due = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="Pending fees dues for student")
     whatsapp_opt_in = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)

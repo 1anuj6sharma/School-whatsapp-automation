@@ -11,17 +11,14 @@ from api.utils.phone import mask_phone_number
 class CampaignService:
     @staticmethod
     def create_and_start_campaign(
-        class_id: int,
-        template_id: int,
+        class_id: Optional[int] = None,
+        template_id: Optional[int] = None,
+        class_ids: Optional[List[int]] = None,
         student_ids: Optional[List[int]] = None,
         dynamic_parameters: Optional[List[str]] = None,
         per_student_parameters: Optional[Dict[Any, List[str]]] = None,
         header_image_url: Optional[str] = None,
     ) -> MessageCampaign:
-        school_class = Class.objects.filter(id=class_id).first()
-        if not school_class:
-            raise ValueError(f"Class with ID {class_id} not found.")
-
         template = MessageTemplate.objects.filter(id=template_id).first()
         if not template:
             raise ValueError(f"Template with ID {template_id} not found.")
@@ -32,13 +29,27 @@ class CampaignService:
                 "Only ACTIVE (approved by Meta) templates can be used to send messages."
             )
 
-        students_qs = Student.objects.filter(school_class_id=class_id)
+        # Resolve target classes and students
+        if class_ids and len(class_ids) > 0:
+            classes_qs = Class.objects.filter(id__in=class_ids)
+            school_class = classes_qs.first() if len(class_ids) == 1 else None
+            students_qs = Student.objects.filter(school_class_id__in=class_ids)
+        elif class_id:
+            school_class = Class.objects.filter(id=class_id).first()
+            if not school_class:
+                raise ValueError(f"Class with ID {class_id} not found.")
+            students_qs = Student.objects.filter(school_class_id=class_id)
+        else:
+            school_class = None
+            students_qs = Student.objects.all()
+
         if student_ids and len(student_ids) > 0:
             students_qs = students_qs.filter(id__in=student_ids)
 
         all_students = list(students_qs)
         if not all_students:
-            raise ValueError(f"No students found in {school_class.name} to send messages to.")
+            target_desc = school_class.name if school_class else "selected classes"
+            raise ValueError(f"No students found in {target_desc} to send messages to.")
 
         opted_in_students = [s for s in all_students if s.whatsapp_opt_in]
         skipped_students = [s for s in all_students if not s.whatsapp_opt_in]
@@ -149,6 +160,11 @@ class CampaignService:
                     p_name = (student.parent_name if student and student.parent_name else "Parent").strip()
                     s_name = (student.student_name if student and student.student_name else "Student").strip()
 
+                    fee_num = float(student.fees_due) if student and getattr(student, "fees_due", None) is not None else 0.0
+                    fee_str = f"₹{fee_num:,.2f}"
+                    if fee_str.endswith(".00"):
+                        fee_str = fee_str[:-3]
+
                     resolved_list = []
                     for param_str in dynamic_parameters:
                         p_val = str(param_str)
@@ -156,6 +172,13 @@ class CampaignService:
                         p_val = p_val.replace("{parent_name}", p_name).replace("{{parent_name}}", p_name)
                         p_val = p_val.replace("{Student Name}", s_name).replace("{{Student Name}}", s_name)
                         p_val = p_val.replace("{student_name}", s_name).replace("{{student_name}}", s_name)
+                        p_val = p_val.replace("{Fees Due}", fee_str).replace("{{Fees Due}}", fee_str)
+                        p_val = p_val.replace("{fees_due}", fee_str).replace("{{fees_due}}", fee_str)
+                        p_val = p_val.replace("{Fees Amount}", fee_str).replace("{{Fees Amount}}", fee_str)
+                        p_val = p_val.replace("{fees_amount}", fee_str).replace("{{fees_amount}}", fee_str)
+                        p_val = p_val.replace("{fees}", fee_str).replace("{{fees}}", fee_str)
+                        p_val = p_val.replace("{fee}", fee_str).replace("{{fee}}", fee_str)
+                        p_val = p_val.replace("{amount}", fee_str).replace("{{amount}}", fee_str)
                         resolved_list.append(p_val)
                     params = resolved_list
 

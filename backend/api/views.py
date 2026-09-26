@@ -418,12 +418,24 @@ class CampaignListCreateView(APIView):
         )
 
         for c in campaigns:
-            if c.status == "PROCESSING":
-                has_queued = c.message_logs.filter(status="QUEUED").exists()
-                if not has_queued:
-                    c.status = "COMPLETED"
-                    c.completed_at = c.completed_at or timezone.now()
-                    c.save()
+            sent_cnt = c.message_logs.filter(status__in=["SENT", "DELIVERED", "READ"]).count()
+            fail_cnt = c.message_logs.filter(status="FAILED").count()
+            has_queued = c.message_logs.filter(status="QUEUED").exists()
+
+            needs_save = False
+            if c.successful_count != sent_cnt:
+                c.successful_count = sent_cnt
+                needs_save = True
+            if c.failed_count != fail_cnt:
+                c.failed_count = fail_cnt
+                needs_save = True
+            if (c.status == "PROCESSING" and not has_queued) or (c.status != "COMPLETED" and not has_queued and (sent_cnt + fail_cnt) >= c.total_recipients):
+                c.status = "COMPLETED"
+                c.completed_at = c.completed_at or timezone.now()
+                needs_save = True
+
+            if needs_save:
+                c.save(update_fields=["successful_count", "failed_count", "status", "completed_at"])
 
         serializer = CampaignSerializer(campaigns, many=True)
         return Response(serializer.data)
@@ -461,12 +473,24 @@ class CampaignDetailView(APIView):
         except MessageCampaign.DoesNotExist:
             return Response({"detail": "Campaign not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if campaign.status == "PROCESSING":
-            has_queued = campaign.message_logs.filter(status="QUEUED").exists()
-            if not has_queued:
-                campaign.status = "COMPLETED"
-                campaign.completed_at = campaign.completed_at or timezone.now()
-                campaign.save()
+        sent_cnt = campaign.message_logs.filter(status__in=["SENT", "DELIVERED", "READ"]).count()
+        fail_cnt = campaign.message_logs.filter(status="FAILED").count()
+        has_queued = campaign.message_logs.filter(status="QUEUED").exists()
+
+        needs_save = False
+        if campaign.successful_count != sent_cnt:
+            campaign.successful_count = sent_cnt
+            needs_save = True
+        if campaign.failed_count != fail_cnt:
+            campaign.failed_count = fail_cnt
+            needs_save = True
+        if (campaign.status == "PROCESSING" and not has_queued) or (campaign.status != "COMPLETED" and not has_queued and (sent_cnt + fail_cnt) >= campaign.total_recipients):
+            campaign.status = "COMPLETED"
+            campaign.completed_at = campaign.completed_at or timezone.now()
+            needs_save = True
+
+        if needs_save:
+            campaign.save(update_fields=["successful_count", "failed_count", "status", "completed_at"])
 
         return Response(CampaignDetailSerializer(campaign).data)
 

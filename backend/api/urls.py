@@ -18,9 +18,19 @@ from .views import (
     EmbeddedSignupConfigView,
     EmbeddedSignupExchangeTokenView,
     MediaUploadView,
+    AuthLoginView,
+    AuthMeView,
+    AuthLogoutView,
 )
 
 urlpatterns = [
+    # Authentication API (Hardcoded Login from .env)
+    path("api/auth/login", AuthLoginView.as_view(), name="auth-login"),
+    path("api/auth/login/", AuthLoginView.as_view(), name="auth-login-slash"),
+    path("api/auth/me", AuthMeView.as_view(), name="auth-me"),
+    path("api/auth/me/", AuthMeView.as_view(), name="auth-me-slash"),
+    path("api/auth/logout", AuthLogoutView.as_view(), name="auth-logout"),
+    path("api/auth/logout/", AuthLogoutView.as_view(), name="auth-logout-slash"),
     # Classes API
     path("api/classes", ClassListCreateView.as_view(), name="class-list-create"),
     path("api/classes/", ClassListCreateView.as_view(), name="class-list-create-slash"),

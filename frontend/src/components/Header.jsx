@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Send, CheckCircle2, AlertCircle, RefreshCw, Menu } from 'lucide-react';
+import { Send, CheckCircle2, AlertCircle, RefreshCw, Menu, LogOut, UserCheck } from 'lucide-react';
 import { api } from '../services/api';
 
-export const Header = ({ title, subtitle, onQuickSendClick, onMenuToggle }) => {
+export const Header = ({ title, subtitle, onQuickSendClick, onMenuToggle, currentUser, onLogout }) => {
   const [backendStatus, setBackendStatus] = useState('checking');
 
   const checkStatus = async () => {
@@ -42,7 +42,7 @@ export const Header = ({ title, subtitle, onQuickSendClick, onMenuToggle }) => {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-3.5 shrink-0">
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         {/* Backend health status indicator */}
         <div
           className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold border cursor-pointer transition-all ${
@@ -58,19 +58,12 @@ export const Header = ({ title, subtitle, onQuickSendClick, onMenuToggle }) => {
           {backendStatus === 'connected' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
           {backendStatus === 'checking' && <RefreshCw className="w-3.5 h-3.5 text-amber-600 animate-spin shrink-0" />}
           {backendStatus === 'error' && <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
-          <span className="hidden xs:inline">
+          <span className="hidden lg:inline">
             {backendStatus === 'connected'
               ? 'Backend Online'
               : backendStatus === 'checking'
               ? 'Checking...'
               : 'Backend Offline'}
-          </span>
-          <span className="xs:hidden">
-            {backendStatus === 'connected'
-              ? 'Online'
-              : backendStatus === 'checking'
-              ? 'Check'
-              : 'Offline'}
           </span>
         </div>
 
@@ -84,7 +77,34 @@ export const Header = ({ title, subtitle, onQuickSendClick, onMenuToggle }) => {
             <span className="sm:hidden">Broadcast</span>
           </button>
         )}
+
+        {/* User Badge & Logout */}
+        {currentUser && (
+          <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
+            <div className="hidden sm:flex flex-col items-end text-right">
+              <span className="text-xs font-bold text-slate-800 leading-tight">
+                {currentUser.name || 'Admin'}
+              </span>
+              <span className="text-[10px] text-slate-500 font-mono truncate max-w-[140px]">
+                {currentUser.email}
+              </span>
+            </div>
+
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                title="Log Out of Admin Session"
+                className="p-2 rounded-xl text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition-all flex items-center gap-1 text-xs font-semibold"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden md:inline">Logout</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </header>
   );
 };
+

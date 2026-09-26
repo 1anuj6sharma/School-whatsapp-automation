@@ -1,6 +1,46 @@
 const API_BASE = ''; // Uses Vite proxy in development or direct host in production
 
+export const authStorage = {
+  getToken() {
+    return localStorage.getItem('school_auth_token') || '';
+  },
+  setToken(token) {
+    if (token) localStorage.setItem('school_auth_token', token);
+    else localStorage.removeItem('school_auth_token');
+  },
+  getUser() {
+    try {
+      const u = localStorage.getItem('school_auth_user');
+      return u ? JSON.parse(u) : null;
+    } catch {
+      return null;
+    }
+  },
+  setUser(user) {
+    if (user) localStorage.setItem('school_auth_user', JSON.stringify(user));
+    else localStorage.removeItem('school_auth_user');
+  },
+  clear() {
+    localStorage.removeItem('school_auth_token');
+    localStorage.removeItem('school_auth_user');
+  },
+};
+
+function getAuthHeaders(headers = {}) {
+  const token = authStorage.getToken();
+  if (token) {
+    return {
+      ...headers,
+      Authorization: `Bearer ${token}`,
+    };
+  }
+  return headers;
+}
+
 async function handleResponse(response) {
+  if (response.status === 401) {
+    // If token invalid, allow app to handle login state
+  }
   if (!response.ok) {
     let errorDetail = `HTTP Error ${response.status}: ${response.statusText}`;
     try {
@@ -20,9 +60,43 @@ async function handleResponse(response) {
 }
 
 export const api = {
+  // Authentication
+  async login(email, password) {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await handleResponse(res);
+    if (data.token) {
+      authStorage.setToken(data.token);
+      authStorage.setUser(data.user);
+    }
+    return data;
+  },
+
+  async getMe() {
+    const res = await fetch(`${API_BASE}/api/auth/me`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async logout() {
+    try {
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+    } catch (_) {}
+    authStorage.clear();
+  },
+
   // Health
   async getHealth() {
-    const res = await fetch(`${API_BASE}/health`);
+    const res = await fetch(`${API_BASE}/health`, {
+      headers: getAuthHeaders(),
+    });
     return handleResponse(res);
   },
 

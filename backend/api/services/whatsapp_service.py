@@ -116,28 +116,106 @@ class WhatsAppService:
         phone_id = self.get_phone_number_id()
         token = self.get_access_token()
         if not phone_id or not token:
+            logger.error("[WhatsAppService] Cannot upload media: Phone ID or Token missing.")
             return None
+
+        import hashlib
+        file_hash = hashlib.md5(file_bytes).hexdigest()
+        if not hasattr(self, "_media_id_cache"):
+            self._media_id_cache = {}
+        if file_hash in self._media_id_cache:
+            cached_id = self._media_id_cache[file_hash]
+            logger.info(f"[WhatsAppService] Using cached Meta media_id: {cached_id} for {filename}")
+            return cached_id
 
         url = f"https://graph.facebook.com/{self.api_version}/{phone_id}/media"
         headers = {"Authorization": f"Bearer {token}"}
-        data = {"messaging_product": "whatsapp", "type": mime_type}
-        files = {"file": (filename, file_bytes, mime_type)}
+        files = {
+            "messaging_product": (None, "whatsapp"),
+            "type": (None, mime_type),
+            "file": (filename, file_bytes, mime_type),
+        }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=45.0) as client:
             try:
                 logger.info(f"[WhatsAppService] Uploading broadcast media to Meta ({filename}, {len(file_bytes)} bytes)...")
-                response = await client.post(url, headers=headers, data=data, files=files)
+                response = await client.post(url, headers=headers, files=files)
                 res_data = response.json()
                 if response.status_code in (200, 201):
                     media_id = res_data.get("id")
                     logger.info(f"[WhatsAppService] Meta media uploaded successfully! Media ID: {media_id}")
+                    self._media_id_cache[file_hash] = media_id
                     return media_id
                 else:
-                    logger.error(f"[WhatsAppService] Meta media upload failed: {res_data}")
+                    logger.error(f"[WhatsAppService] Meta media upload failed (HTTP {response.status_code}): {res_data}")
                     return None
             except Exception as ex:
                 logger.error(f"[WhatsAppService] Exception uploading media to Meta: {ex}")
                 return None
+
+    async def _resolve_image_media_id(self, raw_url: str) -> Optional[str]:
+        """
+        Resolves an image URL or local path to a Meta media_id by checking local disk locations
+        or downloading public URLs and uploading to Meta.
+        """
+        if not raw_url or not raw_url.strip():
+            return None
+        raw = raw_url.strip()
+        if raw.isdigit() and len(raw) > 10:
+            return raw
+
+        local_filename = Path(raw).name
+        candidates = [
+            os.path.join(str(settings.MEDIA_ROOT), local_filename),
+            os.path.join(str(settings.BASE_DIR), "data", "uploads", local_filename),
+            os.path.join("/app/data/uploads", local_filename),
+            os.path.join("c:/inverosoft/School whatsapp/backend/data/uploads", local_filename),
+        ]
+        if "/uploads/" in raw:
+            rel = raw.split("/uploads/")[-1]
+            candidates.extend([
+                os.path.join(str(settings.MEDIA_ROOT), rel),
+                os.path.join(str(settings.BASE_DIR), "data", "uploads", rel),
+                os.path.join("/app/data/uploads", rel),
+                os.path.join("c:/inverosoft/School whatsapp/backend/data/uploads", rel),
+            ])
+        if os.path.exists(raw):
+            candidates.insert(0, raw)
+
+        img_bytes = None
+        chosen_filename = local_filename
+        mime_type = "image/png" if local_filename.lower().endswith(".png") else "image/jpeg"
+
+        for p in candidates:
+            if os.path.exists(p) and os.path.isfile(p):
+                try:
+                    with open(p, "rb") as f:
+                        img_bytes = f.read()
+                        if img_bytes:
+                            chosen_filename = os.path.basename(p)
+                            mime_type = "image/png" if chosen_filename.lower().endswith(".png") else "image/jpeg"
+                            logger.info(f"[WhatsAppService] Found local broadcast image at {p} ({len(img_bytes)} bytes)")
+                            break
+                except Exception as ex:
+                    logger.warning(f"[WhatsAppService] Could not read local file {p}: {ex}")
+
+        if not img_bytes and (raw.startswith("http://") or raw.startswith("https://")):
+            if "localhost" not in raw and "127.0.0.1" not in raw:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as fetch_client:
+                        r = await fetch_client.get(raw)
+                        if r.status_code == 200:
+                            img_bytes = r.content
+                            ct = r.headers.get("Content-Type", "")
+                            if ct:
+                                mime_type = ct.split(";")[0].strip()
+                except Exception as e:
+                    logger.warning(f"[WhatsAppService] Could not download image from {raw}: {e}")
+
+        if img_bytes:
+            return await self.upload_broadcast_media(img_bytes, filename=chosen_filename, mime_type=mime_type)
+
+        return None
 
     def update_credentials(
         self,
@@ -183,83 +261,62 @@ class WhatsAppService:
         sanitized_recipient = sanitize_phone_number(recipient_number)
         masked = mask_phone_number(sanitized_recipient)
 
+        # Look up template definition from DB to ensure header type and language match Meta
+        tpl_header_type = None
+        tpl_language = None
+        try:
+            from api.models import MessageTemplate
+            tpl = MessageTemplate.objects.filter(name=template_name).first()
+            if tpl:
+                tpl_header_type = (tpl.header_type or "NONE").upper()
+                if tpl.language:
+                    tpl_language = tpl.language
+                if not header_image_url and not header_text:
+                    if tpl_header_type == "IMAGE" and tpl.sample_image_url:
+                        header_image_url = tpl.sample_image_url
+                    elif tpl_header_type == "TEXT" and tpl.header_text:
+                        header_text = tpl.header_text
+        except Exception:
+            pass
+
+        effective_lang = tpl_language or language_code or "en_US"
+
         payload: Dict[str, Any] = {
             "messaging_product": "whatsapp",
+            "recipient_type": "individual",
             "to": sanitized_recipient,
             "type": "template",
             "template": {
                 "name": template_name,
-                "language": {"code": language_code},
+                "language": {"code": effective_lang},
             },
         }
 
         components: List[Dict[str, Any]] = []
 
-        if header_image_url and header_image_url.strip():
+        # Only add header parameter if template is configured for a header
+        if (tpl_header_type != "NONE" and tpl_header_type != "TEXT") and header_image_url and header_image_url.strip():
             raw_url = header_image_url.strip()
-            # If already a media_id (digits only)
-            if raw_url.isdigit() and len(raw_url) > 10:
+            media_id = await self._resolve_image_media_id(raw_url)
+            if media_id:
                 components.append({
                     "type": "header",
-                    "parameters": [{"type": "image", "image": {"id": raw_url}}]
+                    "parameters": [{"type": "image", "image": {"id": media_id}}]
+                })
+            elif raw_url.startswith("https://") and "localhost" not in raw_url:
+                components.append({
+                    "type": "header",
+                    "parameters": [{"type": "image", "image": {"link": raw_url}}]
                 })
             else:
-                # Upload file to Meta to obtain a genuine media_id so Meta doesn't need to fetch localhost
-                media_id = None
-                local_filename = Path(raw_url).name
-                local_path = os.path.join(settings.MEDIA_ROOT, local_filename)
-
-                img_bytes = None
-                mime_type = "image/png" if local_filename.lower().endswith(".png") else "image/jpeg"
-
-                if os.path.exists(local_path):
-                    try:
-                        with open(local_path, "rb") as f:
-                            img_bytes = f.read()
-                    except Exception as e:
-                        logger.warning(f"[WhatsAppService] Could not read local file {local_path}: {e}")
-
-                if not img_bytes and "/uploads/" in raw_url:
-                    parts = raw_url.split("/uploads/")
-                    if len(parts) > 1:
-                        target_file = os.path.join(settings.MEDIA_ROOT, parts[-1])
-                        if os.path.exists(target_file):
-                            try:
-                                with open(target_file, "rb") as f:
-                                    img_bytes = f.read()
-                                    local_filename = parts[-1]
-                            except Exception:
-                                pass
-
-                if not img_bytes and (raw_url.startswith("http://") or raw_url.startswith("https://")):
-                    if "localhost" not in raw_url and "127.0.0.1" not in raw_url:
-                        try:
-                            async with httpx.AsyncClient(timeout=15.0) as fetch_client:
-                                r = await fetch_client.get(raw_url)
-                                if r.status_code == 200:
-                                    img_bytes = r.content
-                                    ct = r.headers.get("Content-Type", "")
-                                    if ct:
-                                        mime_type = ct.split(";")[0].strip()
-                        except Exception as e:
-                            logger.warning(f"[WhatsAppService] Could not download image from {raw_url}: {e}")
-
-                if img_bytes:
-                    media_id = await self.upload_broadcast_media(img_bytes, filename=local_filename, mime_type=mime_type)
-
-                if media_id:
-                    components.append({
-                        "type": "header",
-                        "parameters": [{"type": "image", "image": {"id": media_id}}]
-                    })
-                elif raw_url.startswith("https://") and "localhost" not in raw_url:
-                    components.append({
-                        "type": "header",
-                        "parameters": [{"type": "image", "image": {"link": raw_url}}]
-                    })
-                else:
-                    logger.warning(f"[WhatsAppService] Could not resolve image media for {raw_url}")
-        elif header_text and header_text.strip():
+                err_msg = f"Could not resolve or upload image header for '{raw_url}'."
+                logger.error(f"[WhatsAppService] {err_msg}")
+                return {
+                    "success": False,
+                    "error": err_msg,
+                    "meta_error": {"type": "MediaError", "message": err_msg},
+                }
+        elif (tpl_header_type == "TEXT" or not tpl_header_type) and header_text and header_text.strip():
             components.append({
                 "type": "header",
                 "parameters": [

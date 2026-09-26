@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     WHATSAPP_VERIFY_TOKEN: str = Field(default="school_whatsapp_verify_token_secret_123", description="Webhook Verification Token")
     WHATSAPP_MAX_CONCURRENCY: int = Field(default=5, description="Maximum concurrent WhatsApp sending requests")
 
+    # Hardcoded Authentication (.env login)
+    ADMIN_EMAIL: str = Field(default="admin@school.com", description="Admin login email")
+    ADMIN_PASSWORD: str = Field(default="admin123", description="Admin login password")
+
+
     # Database Settings: Supports individual parameters or full DATABASE_URL
     DB_TYPE: str = Field(default="sqlite", description="mssql | postgres | sqlite")
     DB_HOST: str | None = Field(default=None, description="Database host (e.g. localhost, 127.0.0.1)")

@@ -145,7 +145,19 @@ class CampaignService:
                 ):
                     params = per_student_parameters.get(str(student_id)) or per_student_parameters.get(student_id)
                 elif dynamic_parameters:
-                    params = dynamic_parameters
+                    student = log_item.student
+                    p_name = (student.parent_name if student and student.parent_name else "Parent").strip()
+                    s_name = (student.student_name if student and student.student_name else "Student").strip()
+
+                    resolved_list = []
+                    for param_str in dynamic_parameters:
+                        p_val = str(param_str)
+                        p_val = p_val.replace("{Parent Name}", p_name).replace("{{Parent Name}}", p_name)
+                        p_val = p_val.replace("{parent_name}", p_name).replace("{{parent_name}}", p_name)
+                        p_val = p_val.replace("{Student Name}", s_name).replace("{{Student Name}}", s_name)
+                        p_val = p_val.replace("{student_name}", s_name).replace("{{student_name}}", s_name)
+                        resolved_list.append(p_val)
+                    params = resolved_list
 
                 result = await whatsapp_service.send_template_message(
                     recipient_number=log_item.recipient_number,
@@ -185,6 +197,10 @@ class CampaignService:
         @sync_to_async
         def finalize_campaign():
             campaign = MessageCampaign.objects.get(id=campaign_id)
+            campaign.successful_count = MessageLog.objects.filter(
+                campaign_id=campaign_id, status__in=["SENT", "DELIVERED", "READ"]
+            ).count()
+            campaign.failed_count = MessageLog.objects.filter(campaign_id=campaign_id, status="FAILED").count()
             campaign.status = "COMPLETED"
             campaign.completed_at = timezone.now()
             campaign.save()

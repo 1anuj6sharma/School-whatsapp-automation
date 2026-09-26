@@ -17,7 +17,8 @@ from app.routers import (
     message_logs_router,
     messages_router,
     webhooks_router,
-    media_router
+    media_router,
+    auth_router,
 )
 
 from app.services.campaign_service import campaign_service
@@ -58,6 +59,7 @@ app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")
 
 # Register Routers
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(classes_router)
 app.include_router(students_router)
 app.include_router(templates_router)

@@ -7,6 +7,7 @@ from app.routers.message_logs import router as message_logs_router
 from app.routers.messages import router as messages_router
 from app.routers.webhooks import router as webhooks_router
 from app.routers.media import router as media_router
+from app.routers.auth import router as auth_router
 
 __all__ = [
     "health_router",
@@ -17,5 +18,7 @@ __all__ = [
     "message_logs_router",
     "messages_router",
     "webhooks_router",
-    "media_router"
+    "media_router",
+    "auth_router",
 ]
+

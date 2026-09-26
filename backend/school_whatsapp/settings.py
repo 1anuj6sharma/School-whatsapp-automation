@@ -175,3 +175,8 @@ WHATSAPP_MAX_CONCURRENCY = int(os.getenv("WHATSAPP_MAX_CONCURRENCY", "5"))
 META_APP_ID = os.getenv("META_APP_ID", "")
 META_APP_SECRET = os.getenv("META_APP_SECRET", "")
 META_CONFIG_ID = os.getenv("META_CONFIG_ID", "")
+
+# Hardcoded Authentication Credentials (from .env)
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", os.getenv("LOGIN_EMAIL", "admin@school.com")).strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", os.getenv("LOGIN_PASSWORD", "admin123")).strip()
+

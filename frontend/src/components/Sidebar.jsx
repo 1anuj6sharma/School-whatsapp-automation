@@ -11,9 +11,11 @@ import {
   ShieldCheck,
   MessageSquareShare,
   X,
+  LogOut,
+  User,
 } from 'lucide-react';
 
-export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose }) => {
+export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose, currentUser, onLogout }) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'send-message', label: 'Send Message', icon: Send, highlight: true },
@@ -98,15 +100,47 @@ export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose }) => {
         </nav>
       </div>
 
-      {/* Meta API Status Badge in footer */}
-      <div className="p-3.5 m-3 rounded-2xl bg-slate-50 border border-slate-200/80">
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
-          <ShieldCheck className="w-4 h-4 text-emerald-600" />
-          <span>Meta Cloud API v26.0</span>
+      <div className="p-3.5 space-y-2">
+        {/* User profile & Logout */}
+        {currentUser && (
+          <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs shrink-0">
+                <User className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-800 truncate leading-tight">
+                  {currentUser.name || 'Admin'}
+                </p>
+                <p className="text-[10px] text-slate-500 font-mono truncate">
+                  {currentUser.email}
+                </p>
+              </div>
+            </div>
+
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                title="Log Out"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors shrink-0"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Meta API Status Badge in footer */}
+        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
+            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            <span>Meta Cloud API v26.0</span>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-1 leading-normal font-normal">
+            Real WhatsApp Graph API engine.
+          </p>
         </div>
-        <p className="text-[11px] text-slate-500 mt-1 leading-normal font-normal">
-          Real WhatsApp Graph API integration engine.
-        </p>
       </div>
     </aside>
   );

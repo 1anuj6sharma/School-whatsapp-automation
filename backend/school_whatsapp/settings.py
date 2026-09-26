@@ -134,6 +134,14 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Media files (Uploaded images & documents)
+MEDIA_URL = "/uploads/"
+MEDIA_ROOT = Path("/app/data/uploads") if Path("/app/data").is_dir() else BASE_DIR / "data" / "uploads"
+try:
+    MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS Configuration

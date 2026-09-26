@@ -1,4 +1,7 @@
+import os
 import io
+import uuid
+from pathlib import Path
 import asyncio
 import pandas as pd
 from datetime import datetime
@@ -9,6 +12,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog
 from .serializers import (
@@ -305,6 +309,8 @@ class TemplateListCreateView(APIView):
                             "status": item["status"],
                             "body_preview": item["body_preview"],
                             "description": item.get("description", f"Meta {item['category']} Template"),
+                            "header_type": item.get("header_type", "NONE"),
+                            "header_text": item.get("header_text"),
                         }
                     )
                 templates = list(MessageTemplate.objects.all().order_by("name"))
@@ -331,6 +337,9 @@ class TemplateListCreateView(APIView):
                     language=data["language"],
                     body_text=data["body_text"],
                     sample_values=data.get("sample_values"),
+                    header_type=data.get("header_type", "NONE"),
+                    header_text=data.get("header_text"),
+                    sample_image_url=data.get("sample_image_url"),
                 )
             )
         except ValueError as val_err:
@@ -349,6 +358,9 @@ class TemplateListCreateView(APIView):
             body_preview=meta_result["body_preview"],
             status=tpl_status,
             description=f"Meta {meta_result['category']} Template ({meta_result['language']})",
+            header_type=meta_result.get("header_type", data.get("header_type", "NONE")),
+            header_text=meta_result.get("header_text", data.get("header_text")),
+            sample_image_url=meta_result.get("sample_image_url", data.get("sample_image_url")),
         )
         return Response(TemplateSerializer(template).data, status=status.HTTP_201_CREATED)
 
@@ -372,6 +384,8 @@ class TemplateSyncView(APIView):
                     "status": item["status"],
                     "body_preview": item["body_preview"],
                     "description": item.get("description", f"Meta {item['category']} Template"),
+                    "header_type": item.get("header_type", "NONE"),
+                    "header_text": item.get("header_text"),
                 }
             )
 
@@ -426,6 +440,7 @@ class CampaignListCreateView(APIView):
                 student_ids=vdata.get("student_ids"),
                 dynamic_parameters=vdata.get("dynamic_parameters"),
                 per_student_parameters=vdata.get("per_student_parameters"),
+                header_image_url=vdata.get("header_image_url"),
             )
         except ValueError as val_err:
             return Response({"detail": str(val_err)}, status=status.HTTP_400_BAD_REQUEST)
@@ -632,3 +647,56 @@ class EmbeddedSignupExchangeTokenView(APIView):
             return Response({"success": True, "message": "WhatsApp credentials updated successfully."})
 
         return Response({"detail": "No code or access token provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MediaUploadView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        if "file" not in request.FILES:
+            return Response(
+                {"detail": "No file uploaded. Please select an image file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        uploaded_file = request.FILES["file"]
+        ext = Path(uploaded_file.name).suffix.lower()
+
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
+        if ext not in allowed_extensions:
+            return Response(
+                {"detail": f"Unsupported file type '{ext}'. Allowed types: JPG, JPEG, PNG, WEBP."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        max_size = 5 * 1024 * 1024  # 5MB Meta WhatsApp limit
+        if uploaded_file.size > max_size:
+            return Response(
+                {"detail": "File size exceeds 5MB limit. Please upload an image under 5MB."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        upload_dir = settings.MEDIA_ROOT
+        os.makedirs(upload_dir, exist_ok=True)
+
+        clean_original_name = Path(uploaded_file.name).name.replace(" ", "_")
+        unique_filename = f"{uuid.uuid4().hex[:12]}_{clean_original_name}"
+        file_path = os.path.join(upload_dir, unique_filename)
+
+        with open(file_path, "wb+") as destination:
+            for chunk in uploaded_file.chunks():
+                destination.write(chunk)
+
+        base_url = request.build_absolute_uri("/").rstrip("/")
+        file_url = f"{base_url}/uploads/{unique_filename}"
+        relative_url = f"/uploads/{unique_filename}"
+
+        return Response(
+            {
+                "success": True,
+                "filename": unique_filename,
+                "url": file_url,
+                "relative_url": relative_url,
+            },
+            status=status.HTTP_201_CREATED,
+        )

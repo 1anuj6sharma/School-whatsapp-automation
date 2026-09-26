@@ -29,6 +29,8 @@ async def seed_database():
                     existing.language = item["language"]
                     existing.status = item["status"]
                     existing.body_preview = item["body_preview"]
+                    existing.header_type = item.get("header_type", "NONE")
+                    existing.header_text = item.get("header_text")
                     existing.description = item.get("description", existing.description)
                 else:
                     new_tpl = MessageTemplate(
@@ -37,6 +39,8 @@ async def seed_database():
                         language=item["language"],
                         status=item["status"],
                         body_preview=item["body_preview"],
+                        header_type=item.get("header_type", "NONE"),
+                        header_text=item.get("header_text"),
                         description=item.get("description", f"Meta {item['category']} Template")
                     )
                     session.add(new_tpl)

@@ -69,7 +69,8 @@ async def create_campaign(payload: CampaignCreateRequest, db: AsyncSession = Dep
             template_id=payload.template_id,
             student_ids=payload.student_ids,
             dynamic_parameters=payload.dynamic_parameters,
-            per_student_parameters=payload.per_student_parameters
+            per_student_parameters=payload.per_student_parameters,
+            header_image_url=payload.header_image_url
         )
 
         # Reload with relationships
@@ -94,6 +95,7 @@ async def create_campaign(payload: CampaignCreateRequest, db: AsyncSession = Dep
             successful_count=refreshed.successful_count,
             failed_count=refreshed.failed_count,
             skipped_count=refreshed.skipped_count,
+            header_image_url=refreshed.header_image_url,
             status=refreshed.status,
             created_at=refreshed.created_at,
             started_at=refreshed.started_at,

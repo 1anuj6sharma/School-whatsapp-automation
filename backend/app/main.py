@@ -6,6 +6,8 @@ from app.config import settings
 from app.database import init_db
 from app.seed import seed_database
 from app.utils.logger import logger
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
 from app.routers import (
     health_router,
     classes_router,
@@ -14,7 +16,8 @@ from app.routers import (
     campaigns_router,
     message_logs_router,
     messages_router,
-    webhooks_router
+    webhooks_router,
+    media_router
 )
 
 from app.services.campaign_service import campaign_service
@@ -23,6 +26,7 @@ from app.services.campaign_service import campaign_service
 async def lifespan(app: FastAPI):
     logger.info("Initializing School WhatsApp Automation Backend...")
     try:
+        Path("data/uploads").mkdir(parents=True, exist_ok=True)
         await init_db()
         await seed_database()
         await campaign_service.cleanup_stale_campaigns()
@@ -48,6 +52,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Ensure upload dir exists and mount static files
+Path("data/uploads").mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")
+
 # Register Routers
 app.include_router(health_router)
 app.include_router(classes_router)
@@ -57,6 +65,7 @@ app.include_router(campaigns_router)
 app.include_router(message_logs_router)
 app.include_router(messages_router)
 app.include_router(webhooks_router)
+app.include_router(media_router)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

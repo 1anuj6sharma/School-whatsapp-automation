@@ -38,10 +38,13 @@ class WhatsAppService:
         template_name: str,
         language_code: str = "en_US",
         parameters: Optional[List[str]] = None,
+        header_image_url: Optional[str] = None,
+        header_text: Optional[str] = None,
         max_retries: int = 3
     ) -> Dict[str, Any]:
         """
         Sends a template message via Meta WhatsApp Cloud API.
+        Supports text body parameters and optional media (IMAGE) or text headers.
         Uses httpx with exponential backoff on 429 rate limits or transient 5xx errors.
         """
         valid, err_msg = self.validate_configuration()
@@ -69,14 +72,41 @@ class WhatsAppService:
             }
         }
 
-        # If dynamic parameters are supplied for parameterized templates
+        # Build components array for header and body
+        components: List[Dict[str, Any]] = []
+
+        if header_image_url and header_image_url.strip():
+            components.append({
+                "type": "header",
+                "parameters": [
+                    {
+                        "type": "image",
+                        "image": {
+                            "link": header_image_url.strip()
+                        }
+                    }
+                ]
+            })
+        elif header_text and header_text.strip():
+            components.append({
+                "type": "header",
+                "parameters": [
+                    {
+                        "type": "text",
+                        "text": header_text.strip()
+                    }
+                ]
+            })
+
+        # If dynamic parameters are supplied for parameterized body
         if parameters and len(parameters) > 0:
-            payload["template"]["components"] = [
-                {
-                    "type": "body",
-                    "parameters": [{"type": "text", "text": str(p)} for p in parameters]
-                }
-            ]
+            components.append({
+                "type": "body",
+                "parameters": [{"type": "text", "text": str(p)} for p in parameters]
+            })
+
+        if components:
+            payload["template"]["components"] = components
 
         headers = {
             "Authorization": f"Bearer {self.access_token}",
@@ -212,10 +242,18 @@ class WhatsAppService:
                     
                     components = item.get("components", [])
                     body_text = ""
+                    header_type = "NONE"
+                    header_text = None
+
                     for comp in components:
-                        if comp.get("type") == "BODY":
+                        c_type = (comp.get("type") or "").upper()
+                        if c_type == "HEADER":
+                            header_format = (comp.get("format") or "TEXT").upper()
+                            header_type = header_format
+                            if header_format == "TEXT":
+                                header_text = comp.get("text")
+                        elif c_type == "BODY":
                             body_text = comp.get("text", "")
-                            break
 
                     parsed_templates.append({
                         "name": name,
@@ -224,7 +262,9 @@ class WhatsAppService:
                         "status": status,
                         "raw_status": meta_status,
                         "body_preview": body_text or f"Template '{name}' from Meta WhatsApp Manager.",
-                        "description": f"Meta {category.title()} Template ({language})",
+                        "header_type": header_type,
+                        "header_text": header_text,
+                        "description": f"Meta {category.title()} Template ({language})" + (f" [Media: {header_type}]" if header_type != "NONE" else ""),
                         "meta_id": item.get("id")
                     })
 
@@ -240,7 +280,10 @@ class WhatsAppService:
         category: str,
         language: str,
         body_text: str,
-        sample_values: Optional[List[str]] = None
+        sample_values: Optional[List[str]] = None,
+        header_type: Optional[str] = "NONE",
+        header_text: Optional[str] = None,
+        sample_image_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Submits a new message template directly to Meta WhatsApp Business Account for review.
@@ -256,13 +299,35 @@ class WhatsAppService:
         # Clean name: lowercase alphanumeric and underscores only
         clean_name = re.sub(r"[^a-z0-9_]", "_", name.lower().strip())
 
-        # Build components
+        components_list: List[Dict[str, Any]] = []
+        norm_header_type = (header_type or "NONE").upper().strip()
+
+        # Optional Header Component
+        if norm_header_type == "IMAGE":
+            header_comp: Dict[str, Any] = {
+                "type": "HEADER",
+                "format": "IMAGE"
+            }
+            if sample_image_url and sample_image_url.strip():
+                header_comp["example"] = {
+                    "header_handle": [sample_image_url.strip()]
+                }
+            components_list.append(header_comp)
+        elif norm_header_type == "TEXT" and header_text and header_text.strip():
+            header_comp = {
+                "type": "HEADER",
+                "format": "TEXT",
+                "text": header_text.strip()
+            }
+            components_list.append(header_comp)
+
+        # Build Body Component
         body_component: Dict[str, Any] = {
             "type": "BODY",
             "text": body_text.strip()
         }
 
-        # Check for placeholders {{1}}, {{2}} in text
+        # Check for placeholders {{1}}, {{2}} in body text
         placeholders = re.findall(r"\{\{(\d+)\}\}", body_text)
         if placeholders:
             # Meta requires sample values for each placeholder
@@ -273,16 +338,18 @@ class WhatsAppService:
                 "body_text": [sample_values]
             }
 
+        components_list.append(body_component)
+
         payload = {
             "name": clean_name,
             "category": category.upper(),
             "language": language,
-            "components": [body_component]
+            "components": components_list
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
-                logger.info(f"[WhatsAppService] Creating template '{clean_name}' on Meta WABA: {waba_id}")
+                logger.info(f"[WhatsAppService] Creating template '{clean_name}' (Header: {norm_header_type}) on Meta WABA: {waba_id}")
                 response = await client.post(url, headers=headers, json=payload)
                 data = response.json()
 
@@ -304,6 +371,8 @@ class WhatsAppService:
                     "status": data.get("status", "PENDING").upper(),
                     "category": category.upper(),
                     "language": language,
+                    "header_type": norm_header_type,
+                    "header_text": header_text,
                     "body_preview": body_text.strip()
                 }
             except ValueError:

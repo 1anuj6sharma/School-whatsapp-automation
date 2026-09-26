@@ -8,6 +8,7 @@ class CampaignCreateRequest(BaseModel):
     student_ids: list[int] | None = Field(default=None, description="Optional specific student IDs within class")
     dynamic_parameters: list[str] | None = Field(default=None, description="Optional template parameters")
     per_student_parameters: dict[int, list[str]] | None = Field(default=None, description="Optional per-student customized parameters map {student_id: [param1, param2, ...]}")
+    header_image_url: str | None = Field(default=None, description="Optional image URL for template with IMAGE header")
 
 class CampaignResponse(BaseModel):
     id: int
@@ -19,6 +20,7 @@ class CampaignResponse(BaseModel):
     successful_count: int
     failed_count: int
     skipped_count: int
+    header_image_url: str | None = None
     status: str
     created_at: datetime
     started_at: datetime | None = None

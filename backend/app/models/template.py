@@ -16,6 +16,9 @@ class MessageTemplate(Base):
     language: Mapped[str] = mapped_column(String(20), default="en_US", nullable=False)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     body_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    header_type: Mapped[str | None] = mapped_column(String(30), default="NONE", nullable=True) # NONE, TEXT, IMAGE, DOCUMENT, VIDEO
+    header_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sample_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="PENDING", nullable=False) # ACTIVE, PENDING, REJECTED
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

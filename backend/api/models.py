@@ -47,6 +47,9 @@ class MessageTemplate(models.Model):
     language = models.CharField(max_length=20, default="en_US")
     description = models.CharField(max_length=255, null=True, blank=True)
     body_preview = models.TextField(null=True, blank=True)
+    header_type = models.CharField(max_length=30, default="NONE", null=True, blank=True) # NONE, TEXT, IMAGE, DOCUMENT, VIDEO
+    header_text = models.CharField(max_length=255, null=True, blank=True)
+    sample_image_url = models.CharField(max_length=500, null=True, blank=True)
     status = models.CharField(max_length=30, default="PENDING")  # ACTIVE, PENDING, REJECTED
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
@@ -82,6 +85,7 @@ class MessageCampaign(models.Model):
     successful_count = models.IntegerField(default=0)
     failed_count = models.IntegerField(default=0)
     skipped_count = models.IntegerField(default=0)
+    header_image_url = models.CharField(max_length=500, null=True, blank=True)
     status = models.CharField(max_length=50, default="PENDING")  # PENDING, PROCESSING, COMPLETED, FAILED
 
     created_at = models.DateTimeField(default=timezone.now)

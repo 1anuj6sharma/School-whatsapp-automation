@@ -15,6 +15,8 @@ import {
   RotateCcw,
   Sparkles,
   Eye,
+  Image as ImageIcon,
+  Upload,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
@@ -35,6 +37,11 @@ export const SendMessagePage = ({
 
   // Common Template Variables state
   const [templateVariables, setTemplateVariables] = useState({});
+
+  // Header Image for image templates
+  const [headerImageUrl, setHeaderImageUrl] = useState('');
+  const [localPreviewUrl, setLocalPreviewUrl] = useState('');
+  const [imageUploading, setImageUploading] = useState(false);
 
   // Active student for Live WhatsApp Preview
   const [previewStudentId, setPreviewStudentId] = useState(null);
@@ -129,8 +136,14 @@ export const SendMessagePage = ({
     return unique.sort((a, b) => Number(a) - Number(b));
   }, [selectedTemplate]);
 
-  // When selected template changes, set convenient defaults for variables
+  // When selected template changes, set convenient defaults for variables & header image
   useEffect(() => {
+    if (selectedTemplate?.sample_image_url) {
+      setHeaderImageUrl(selectedTemplate.sample_image_url);
+    } else {
+      setHeaderImageUrl('');
+    }
+
     if (detectedVariables.length > 0) {
       const initialVars = {};
       const tName = selectedTemplate?.name || '';
@@ -153,6 +166,41 @@ export const SendMessagePage = ({
       setTemplateVariables({});
     }
   }, [selectedTemplateId, detectedVariables.length]);
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const objectUrl = URL.createObjectURL(file);
+      setLocalPreviewUrl(objectUrl);
+    } catch (_) {}
+
+    setImageUploading(true);
+    try {
+      const res = await api.uploadMedia(file);
+      if (res.url) {
+        setHeaderImageUrl(res.url);
+        if (showToast) {
+          showToast({
+            type: 'success',
+            title: 'Image Uploaded Successfully',
+            message: 'Image attached to WhatsApp broadcast.',
+          });
+        }
+      }
+    } catch (err) {
+      if (showToast) {
+        showToast({
+          type: 'error',
+          title: 'Image Upload Failed',
+          message: err instanceof Error ? err.message : 'Could not upload image.',
+        });
+      }
+    } finally {
+      setImageUploading(false);
+    }
+  };
 
   const handleVariableChange = (varKey, val) => {
     setTemplateVariables((prev) => ({
@@ -246,6 +294,14 @@ export const SendMessagePage = ({
       });
       return;
     }
+    if (selectedTemplate?.header_type === 'IMAGE' && !headerImageUrl.trim()) {
+      showToast({
+        type: 'warning',
+        title: 'Image Required',
+        message: 'This template requires a header image. Please upload an image or provide an Image URL.',
+      });
+      return;
+    }
     if (selectedCount === 0) {
       showToast({ type: 'warning', title: 'Please select at least one recipient' });
       return;
@@ -270,6 +326,7 @@ export const SendMessagePage = ({
         template_id: Number(selectedTemplateId),
         student_ids: selectedStudentIds,
         dynamic_parameters: dynamicParams.length > 0 ? dynamicParams : undefined,
+        header_image_url: headerImageUrl ? headerImageUrl.trim() : undefined,
       });
 
       showToast({
@@ -371,6 +428,52 @@ export const SendMessagePage = ({
                     Template <strong className="font-mono text-slate-900">{selectedTemplate.name}</strong> has status <span className="font-bold uppercase">{selectedTemplate.status}</span>. Only <strong className="text-emerald-700">ACTIVE / Approved</strong> templates can be broadcasted to parents.
                   </p>
                 </div>
+              </div>
+            )}
+
+            {/* Header Image Attachment Section for Image Templates */}
+            {selectedTemplate && (selectedTemplate.header_type === 'IMAGE' || selectedTemplate.category === 'MARKETING') && (
+              <div className="p-4 rounded-xl bg-purple-50/80 border border-purple-200 text-xs space-y-3 animate-fade-in">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-purple-950 flex items-center gap-2">
+                    <ImageIcon className="w-4 h-4 text-purple-600" />
+                    <span>Header Image Attachment {selectedTemplate.header_type === 'IMAGE' ? <span className="text-rose-600">*</span> : '(Optional)'}</span>
+                  </label>
+                  <span className="text-[10px] text-purple-700 font-semibold bg-purple-100 px-2 py-0.5 rounded border border-purple-200">
+                    Media Header
+                  </span>
+                </div>
+                <p className="text-[11px] text-purple-900/80 leading-relaxed">
+                  Provide a public image URL or upload an image file (JPEG/PNG max 5MB). This image will be sent at the top of each student&apos;s WhatsApp message.
+                </p>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="url"
+                    value={headerImageUrl}
+                    onChange={(e) => setHeaderImageUrl(e.target.value)}
+                    placeholder="https://example.com/school-sports-day.png or click upload"
+                    className="flex-1 bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-600 shadow-xs"
+                  />
+                  <label className="cursor-pointer flex items-center gap-1.5 px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-all shrink-0 active:scale-95">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{imageUploading ? 'Uploading...' : 'Upload Image'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      disabled={imageUploading}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+
+                {headerImageUrl && (
+                  <div className="flex items-center gap-2 text-[11px] text-purple-800 font-medium bg-white/80 p-2 rounded-lg border border-purple-200">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="truncate">Active Image URL: {headerImageUrl}</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -620,19 +723,52 @@ export const SendMessagePage = ({
               </div>
 
               {/* Chat Message Bubble */}
-              <div className="whatsapp-bubble-received p-3.5 max-w-[94%] text-slate-900 text-xs shadow-sm space-y-2 border border-slate-200/50">
-                {selectedTemplate?.name === 'hello_world' ? (
-                  <>
-                    <p className="font-bold text-slate-900 text-sm">Hello World</p>
-                    <p className="text-slate-800 leading-relaxed font-sans">
-                      Welcome and congratulations!! This message demonstrates your ability to send a WhatsApp message notification from the Cloud API, hosted by Meta. Thank you for taking the time to test with us.
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-slate-900 whitespace-pre-wrap leading-relaxed font-sans font-normal">
-                    {renderedPreviewText}
+              <div className="whatsapp-bubble-received p-3.5 max-w-[94%] text-slate-900 text-xs shadow-sm space-y-2.5 border border-slate-200/50 font-sans">
+                {/* Image Header Preview if image template or header image attached */}
+                {(selectedTemplate?.header_type === 'IMAGE' || headerImageUrl || localPreviewUrl) && (
+                  <div className="w-full h-44 rounded-xl bg-gradient-to-br from-purple-50 to-slate-100 border border-purple-200 overflow-hidden flex flex-col items-center justify-center text-slate-400 gap-1.5 shadow-xs relative">
+                    {(localPreviewUrl || headerImageUrl) ? (
+                      <img
+                        src={localPreviewUrl || headerImageUrl}
+                        alt="Broadcast header"
+                        className="w-full h-full object-cover rounded-xl"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center gap-1.5 text-purple-700 py-4 px-3 text-center">
+                        <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 shadow-xs">
+                          <ImageIcon className="w-5 h-5" />
+                        </div>
+                        <span className="text-xs font-bold text-purple-900">Image Header Template</span>
+                        <span className="text-[10px] text-purple-600 font-medium">Attach an image in the header panel above</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Text Header Preview */}
+                {selectedTemplate?.header_type === 'TEXT' && selectedTemplate?.header_text && (
+                  <p className="font-bold text-slate-900 text-xs border-b border-slate-200 pb-1">
+                    {selectedTemplate.header_text}
                   </p>
                 )}
+
+                <div>
+                  {selectedTemplate?.name === 'hello_world' ? (
+                    <>
+                      <p className="font-bold text-slate-900 text-sm">Hello World</p>
+                      <p className="text-slate-800 leading-relaxed font-sans mt-1">
+                        Welcome and congratulations!! This message demonstrates your ability to send a WhatsApp message notification from the Cloud API, hosted by Meta. Thank you for taking the time to test with us.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-slate-900 whitespace-pre-wrap leading-relaxed font-sans font-normal">
+                      {renderedPreviewText}
+                    </p>
+                  )}
+                </div>
 
                 <div className="flex justify-end items-center gap-1 text-[10px] text-slate-400 mt-2">
                   <span>10:30 AM</span>

@@ -22,7 +22,8 @@ class CampaignService:
         template_id: int,
         student_ids: Optional[List[int]] = None,
         dynamic_parameters: Optional[List[str]] = None,
-        per_student_parameters: Optional[Dict[Any, List[str]]] = None
+        per_student_parameters: Optional[Dict[Any, List[str]]] = None,
+        header_image_url: Optional[str] = None
     ) -> MessageCampaign:
         # 1. Validate class
         school_class = await db.get(Class, class_id)
@@ -66,6 +67,7 @@ class CampaignService:
             successful_count=0,
             failed_count=0,
             skipped_count=skipped_count,
+            header_image_url=header_image_url,
             status="PROCESSING" if total_recipients > 0 else "COMPLETED",
             started_at=datetime.utcnow() if total_recipients > 0 else None,
             completed_at=datetime.utcnow() if total_recipients == 0 else None
@@ -119,7 +121,8 @@ class CampaignService:
                     language_code=template.language,
                     class_name=school_class.name,
                     dynamic_parameters=dynamic_parameters,
-                    per_student_parameters=clean_per_student
+                    per_student_parameters=clean_per_student,
+                    header_image_url=header_image_url
                 )
             )
 
@@ -177,7 +180,8 @@ class CampaignService:
         language_code: str,
         class_name: str,
         dynamic_parameters: Optional[List[str]] = None,
-        per_student_parameters: Optional[Dict[Any, List[str]]] = None
+        per_student_parameters: Optional[Dict[Any, List[str]]] = None,
+        header_image_url: Optional[str] = None
     ):
         """
         Executes WhatsApp dispatches concurrently with immediate per-message database commits.
@@ -258,7 +262,8 @@ class CampaignService:
                             recipient_number=recipient,
                             template_name=template_name,
                             language_code=lang,
-                            parameters=final_params
+                            parameters=final_params,
+                            header_image_url=header_image_url
                         )
                         if resp.get("success"):
                             is_success = True

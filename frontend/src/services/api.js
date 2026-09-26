@@ -151,6 +151,17 @@ export const api = {
     return handleResponse(res);
   },
 
+  // Media Upload
+  async uploadMedia(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API_BASE}/api/media/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    return handleResponse(res);
+  },
+
   // Campaigns
   async getCampaigns() {
     const res = await fetch(`${API_BASE}/api/campaigns`);

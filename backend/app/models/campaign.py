@@ -19,6 +19,7 @@ class MessageCampaign(Base):
     successful_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     skipped_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    header_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="PENDING", nullable=False) # PENDING, PROCESSING, COMPLETED, FAILED
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

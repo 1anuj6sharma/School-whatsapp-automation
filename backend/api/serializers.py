@@ -120,6 +120,9 @@ class TemplateSerializer(serializers.ModelSerializer):
             "language",
             "description",
             "body_preview",
+            "header_type",
+            "header_text",
+            "sample_image_url",
             "status",
             "created_at",
             "updated_at",
@@ -130,6 +133,9 @@ class TemplateCreateMetaSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100)
     category = serializers.ChoiceField(choices=["UTILITY", "MARKETING", "AUTHENTICATION"], default="UTILITY")
     language = serializers.CharField(default="en_US")
+    header_type = serializers.CharField(required=False, default="NONE")
+    header_text = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    sample_image_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     body_text = serializers.CharField()
     sample_values = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     description = serializers.CharField(required=False, allow_blank=True)
@@ -176,6 +182,7 @@ class CampaignSerializer(serializers.ModelSerializer):
             "successful_count",
             "failed_count",
             "skipped_count",
+            "header_image_url",
             "status",
             "created_at",
             "started_at",
@@ -196,6 +203,7 @@ class CampaignCreateSerializer(serializers.Serializer):
     student_ids = serializers.ListField(child=serializers.IntegerField(), required=False, allow_null=True)
     dynamic_parameters = serializers.ListField(child=serializers.CharField(), required=False, allow_null=True)
     per_student_parameters = serializers.DictField(child=serializers.ListField(child=serializers.CharField()), required=False, allow_null=True)
+    header_image_url = serializers.CharField(required=False, allow_null=True, allow_blank=True)
 
 
 class TestMessageSerializer(serializers.Serializer):

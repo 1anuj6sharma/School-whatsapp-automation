@@ -1,5 +1,7 @@
+import os
 import asyncio
 import re
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 import httpx
 from django.conf import settings
@@ -28,6 +30,84 @@ class WhatsAppService:
     def get_access_token(self) -> str:
         return (self.access_token or settings.WHATSAPP_ACCESS_TOKEN or "").strip()
 
+    async def get_app_id(self) -> Optional[str]:
+        app_id = (getattr(settings, "META_APP_ID", "") or os.getenv("META_APP_ID", "")).strip()
+        if app_id:
+            return app_id
+
+        token = self.get_access_token()
+        if not token:
+            return None
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(
+                    f"https://graph.facebook.com/{self.api_version}/app",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    discovered_id = data.get("id")
+                    if discovered_id:
+                        logger.info(f"[WhatsAppService] Auto-discovered Meta App ID: {discovered_id}")
+                        return str(discovered_id)
+        except Exception as e:
+            logger.warning(f"[WhatsAppService] Could not auto-discover Meta App ID: {e}")
+        return None
+
+    async def upload_sample_media_handle(self, file_bytes: bytes, mime_type: str = "image/jpeg") -> Optional[str]:
+        """
+        Uploads sample image to Meta Resumable Upload API to generate a valid header_handle.
+        Required by Meta for templates with IMAGE / DOCUMENT / VIDEO headers.
+        """
+        token = self.get_access_token()
+        app_id = await self.get_app_id()
+        if not token or not app_id:
+            logger.warning(f"[WhatsAppService] Cannot upload media handle: Token configured={bool(token)}, App ID={app_id}")
+            return None
+
+        file_length = len(file_bytes)
+        create_session_url = f"https://graph.facebook.com/{self.api_version}/{app_id}/uploads"
+        params = {
+            "file_length": file_length,
+            "file_type": mime_type,
+            "access_token": token,
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                # Step 1: Create upload session on Meta
+                logger.info(f"[WhatsAppService] Initializing Meta upload session for {file_length} bytes ({mime_type})...")
+                session_resp = await client.post(create_session_url, params=params)
+                session_data = session_resp.json()
+                if session_resp.status_code not in (200, 201):
+                    logger.error(f"[WhatsAppService] Meta upload session initialization failed: {session_data}")
+                    return None
+
+                upload_session_id = session_data.get("id")
+                if not upload_session_id:
+                    return None
+
+                # Step 2: Upload raw binary image bytes to the session
+                upload_url = f"https://graph.facebook.com/{self.api_version}/{upload_session_id}"
+                upload_headers = {
+                    "Authorization": f"OAuth {token}",
+                    "file_offset": "0",
+                    "Content-Type": "application/octet-stream",
+                }
+                upload_resp = await client.post(upload_url, headers=upload_headers, content=file_bytes)
+                upload_data = upload_resp.json()
+                if upload_resp.status_code in (200, 201):
+                    handle = upload_data.get("h")
+                    logger.info(f"[WhatsAppService] Meta sample media handle created successfully: {handle}")
+                    return handle
+                else:
+                    logger.error(f"[WhatsAppService] Failed to upload binary bytes to Meta upload session: {upload_data}")
+                    return None
+            except Exception as ex:
+                logger.error(f"[WhatsAppService] Exception uploading sample media to Meta: {ex}")
+                return None
+
     def update_credentials(
         self,
         phone_number_id: Optional[str] = None,
@@ -53,6 +133,8 @@ class WhatsAppService:
         template_name: str,
         language_code: str = "en_US",
         parameters: Optional[List[str]] = None,
+        header_image_url: Optional[str] = None,
+        header_text: Optional[str] = None,
         max_retries: int = 3,
     ) -> Dict[str, Any]:
         phone_id = self.get_phone_number_id()
@@ -80,13 +162,37 @@ class WhatsAppService:
             },
         }
 
+        components: List[Dict[str, Any]] = []
+
+        if header_image_url and header_image_url.strip():
+            components.append({
+                "type": "header",
+                "parameters": [
+                    {
+                        "type": "image",
+                        "image": {"link": header_image_url.strip()}
+                    }
+                ]
+            })
+        elif header_text and header_text.strip():
+            components.append({
+                "type": "header",
+                "parameters": [
+                    {
+                        "type": "text",
+                        "text": header_text.strip()
+                    }
+                ]
+            })
+
         if parameters and len(parameters) > 0:
-            payload["template"]["components"] = [
-                {
-                    "type": "body",
-                    "parameters": [{"type": "text", "text": str(p)} for p in parameters],
-                }
-            ]
+            components.append({
+                "type": "body",
+                "parameters": [{"type": "text", "text": str(p)} for p in parameters],
+            })
+
+        if components:
+            payload["template"]["components"] = components
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -207,10 +313,18 @@ class WhatsAppService:
 
                     components = item.get("components", [])
                     body_text = ""
+                    header_type = "NONE"
+                    header_text = None
+
                     for comp in components:
-                        if comp.get("type") == "BODY":
+                        c_type = (comp.get("type") or "").upper()
+                        if c_type == "HEADER":
+                            header_format = (comp.get("format") or "TEXT").upper()
+                            header_type = header_format
+                            if header_format == "TEXT":
+                                header_text = comp.get("text")
+                        elif c_type == "BODY":
                             body_text = comp.get("text", "")
-                            break
 
                     parsed_templates.append({
                         "name": name,
@@ -219,7 +333,9 @@ class WhatsAppService:
                         "status": status,
                         "raw_status": meta_status,
                         "body_preview": body_text or f"Template '{name}' from Meta WhatsApp Manager.",
-                        "description": f"Meta {category.title()} Template ({language})",
+                        "header_type": header_type,
+                        "header_text": header_text,
+                        "description": f"Meta {category.title()} Template ({language})" + (f" [Media: {header_type}]" if header_type != "NONE" else ""),
                         "meta_id": item.get("id"),
                     })
 
@@ -236,6 +352,9 @@ class WhatsAppService:
         language: str,
         body_text: str,
         sample_values: Optional[List[str]] = None,
+        header_type: Optional[str] = "NONE",
+        header_text: Optional[str] = None,
+        sample_image_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         waba_id = self.get_waba_id()
         token = self.get_access_token()
@@ -249,6 +368,64 @@ class WhatsAppService:
         }
 
         clean_name = re.sub(r"[^a-z0-9_]", "_", name.lower().strip())
+        components_list: List[Dict[str, Any]] = []
+        norm_header_type = (header_type or "NONE").upper().strip()
+
+        # Optional Header Component
+        if norm_header_type == "IMAGE":
+            header_comp: Dict[str, Any] = {
+                "type": "HEADER",
+                "format": "IMAGE",
+            }
+
+            sample_handle = None
+            if sample_image_url and sample_image_url.strip():
+                val = sample_image_url.strip()
+                if val.startswith("4:") or (not val.startswith("http") and not val.startswith("/") and len(val) > 20):
+                    # Already a Meta handle
+                    sample_handle = val
+                else:
+                    # Resolve image bytes from local disk or URL
+                    local_filename = Path(val).name
+                    local_path = os.path.join(settings.MEDIA_ROOT, local_filename)
+
+                    img_bytes = None
+                    mime_type = "image/png" if local_filename.lower().endswith(".png") else "image/jpeg"
+
+                    if os.path.exists(local_path):
+                        try:
+                            with open(local_path, "rb") as f:
+                                img_bytes = f.read()
+                        except Exception as e:
+                            logger.warning(f"[WhatsAppService] Could not read local image {local_path}: {e}")
+
+                    if not img_bytes and (val.startswith("http://") or val.startswith("https://")):
+                        try:
+                            async with httpx.AsyncClient(timeout=15.0) as fetch_client:
+                                r = await fetch_client.get(val)
+                                if r.status_code == 200:
+                                    img_bytes = r.content
+                                    ct = r.headers.get("Content-Type", "")
+                                    if ct:
+                                        mime_type = ct.split(";")[0].strip()
+                        except Exception as e:
+                            logger.warning(f"[WhatsAppService] Could not download sample image from {val}: {e}")
+
+                    if img_bytes:
+                        sample_handle = await self.upload_sample_media_handle(img_bytes, mime_type=mime_type)
+
+            if sample_handle:
+                header_comp["example"] = {"header_handle": [sample_handle]}
+
+            components_list.append(header_comp)
+        elif norm_header_type == "TEXT" and header_text and header_text.strip():
+            components_list.append({
+                "type": "HEADER",
+                "format": "TEXT",
+                "text": header_text.strip(),
+            })
+
+        # Body Component
         body_component: Dict[str, Any] = {
             "type": "BODY",
             "text": body_text.strip(),
@@ -260,16 +437,18 @@ class WhatsAppService:
                 sample_values = [f"Sample_{i}" for i in range(1, len(placeholders) + 1)]
             body_component["example"] = {"body_text": [sample_values]}
 
+        components_list.append(body_component)
+
         payload = {
             "name": clean_name,
             "category": category.upper(),
             "language": language,
-            "components": [body_component],
+            "components": components_list,
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
-                logger.info(f"[WhatsAppService] Creating template '{clean_name}' on Meta WABA: {waba_id}")
+                logger.info(f"[WhatsAppService] Creating template '{clean_name}' on Meta WABA: {waba_id} (Header: {norm_header_type})")
                 response = await client.post(url, headers=headers, json=payload)
                 data = response.json()
 
@@ -292,6 +471,9 @@ class WhatsAppService:
                     "category": category.upper(),
                     "language": language,
                     "body_preview": body_text.strip(),
+                    "header_type": norm_header_type,
+                    "header_text": header_text if norm_header_type == "TEXT" else None,
+                    "sample_image_url": sample_image_url if norm_header_type == "IMAGE" else None,
                 }
             except ValueError:
                 raise

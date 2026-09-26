@@ -17,6 +17,7 @@ from .views import (
     WhatsAppWebhookView,
     EmbeddedSignupConfigView,
     EmbeddedSignupExchangeTokenView,
+    MediaUploadView,
 )
 
 urlpatterns = [
@@ -41,6 +42,10 @@ urlpatterns = [
     path("api/templates/sync/", TemplateSyncView.as_view(), name="template-sync-slash"),
     path("api/templates/<int:pk>", TemplateDetailView.as_view(), name="template-detail"),
     path("api/templates/<int:pk>/", TemplateDetailView.as_view(), name="template-detail-slash"),
+
+    # Media Upload API
+    path("api/media/upload", MediaUploadView.as_view(), name="media-upload"),
+    path("api/media/upload/", MediaUploadView.as_view(), name="media-upload-slash"),
 
     # Campaigns API
     path("api/campaigns", CampaignListCreateView.as_view(), name="campaign-list-create"),

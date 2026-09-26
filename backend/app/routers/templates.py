@@ -52,6 +52,8 @@ async def sync_templates_from_meta(db: AsyncSession = Depends(get_db)):
             existing.language = item["language"]
             existing.status = item["status"]
             existing.body_preview = item["body_preview"]
+            existing.header_type = item.get("header_type", "NONE")
+            existing.header_text = item.get("header_text")
             existing.description = item.get("description", existing.description)
         else:
             new_tpl = MessageTemplate(
@@ -60,6 +62,8 @@ async def sync_templates_from_meta(db: AsyncSession = Depends(get_db)):
                 language=item["language"],
                 status=item["status"],
                 body_preview=item["body_preview"],
+                header_type=item.get("header_type", "NONE"),
+                header_text=item.get("header_text"),
                 description=item.get("description", f"Meta {item['category']} Template")
             )
             db.add(new_tpl)
@@ -90,7 +94,10 @@ async def create_template_direct(payload: TemplateCreateMetaRequest, db: AsyncSe
             category=payload.category,
             language=payload.language,
             body_text=payload.body_text,
-            sample_values=payload.sample_values
+            sample_values=payload.sample_values,
+            header_type=payload.header_type,
+            header_text=payload.header_text,
+            sample_image_url=payload.sample_image_url
         )
     except ValueError as val_err:
         raise HTTPException(status_code=400, detail=str(val_err))
@@ -107,6 +114,9 @@ async def create_template_direct(payload: TemplateCreateMetaRequest, db: AsyncSe
         category=meta_result["category"],
         language=meta_result["language"],
         body_preview=meta_result["body_preview"],
+        header_type=meta_result.get("header_type", payload.header_type or "NONE"),
+        header_text=meta_result.get("header_text", payload.header_text),
+        sample_image_url=payload.sample_image_url,
         status=tpl_status,
         description=f"Meta {meta_result['category']} Template ({meta_result['language']})"
     )

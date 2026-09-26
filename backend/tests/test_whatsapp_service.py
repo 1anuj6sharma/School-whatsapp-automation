@@ -73,3 +73,44 @@ async def test_whatsapp_service_meta_error_response():
         assert result["success"] is False
         assert "Invalid OAuth access token" in result["error"]
         assert result["meta_error"]["code"] == 190
+
+@pytest.mark.asyncio
+async def test_whatsapp_service_send_with_image_header():
+    service = WhatsAppService(
+        phone_number_id="1234567890",
+        access_token="EAABtesttoken",
+        api_version="v26.0"
+    )
+
+    mock_response = httpx.Response(
+        status_code=200,
+        json={
+            "messaging_product": "whatsapp",
+            "contacts": [{"input": "919876543210", "wa_id": "919876543210"}],
+            "messages": [{"id": "wamid.HBgL999999"}]
+        },
+        request=httpx.Request("POST", "https://graph.facebook.com/v26.0/1234567890/messages")
+    )
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+
+        result = await service.send_template_message(
+            recipient_number="919876543210",
+            template_name="annual_sports_day",
+            language_code="en_US",
+            parameters=["Rahul", "25th Oct"],
+            header_image_url="https://example.com/sports-day.png"
+        )
+
+        assert result["success"] is True
+        assert result["message_id"] == "wamid.HBgL999999"
+
+        # Verify payload sent to Meta included header image component
+        call_kwargs = mock_post.call_args.kwargs
+        sent_payload = call_kwargs["json"]
+        components = sent_payload["template"]["components"]
+        assert len(components) == 2
+        assert components[0]["type"] == "header"
+        assert components[0]["parameters"][0]["image"]["link"] == "https://example.com/sports-day.png"
+        assert components[1]["type"] == "body"

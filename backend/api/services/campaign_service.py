@@ -15,7 +15,8 @@ class CampaignService:
         template_id: int,
         student_ids: Optional[List[int]] = None,
         dynamic_parameters: Optional[List[str]] = None,
-        per_student_parameters: Optional[Dict[Any, List[str]]] = None
+        per_student_parameters: Optional[Dict[Any, List[str]]] = None,
+        header_image_url: Optional[str] = None,
     ) -> MessageCampaign:
         school_class = Class.objects.filter(id=class_id).first()
         if not school_class:
@@ -45,10 +46,13 @@ class CampaignService:
         total_recipients = len(opted_in_students)
         skipped_count = len(skipped_students)
 
+        effective_image_url = header_image_url or template.sample_image_url or None
+
         now = timezone.now()
         campaign = MessageCampaign.objects.create(
             school_class=school_class,
             template=template,
+            header_image_url=effective_image_url,
             total_recipients=total_recipients,
             successful_count=0,
             failed_count=0,
@@ -93,6 +97,7 @@ class CampaignService:
                         language_code=template.language,
                         dynamic_parameters=dynamic_parameters,
                         per_student_parameters=per_student_parameters,
+                        header_image_url=effective_image_url,
                     )
                 )
 
@@ -108,6 +113,7 @@ class CampaignService:
         language_code: str,
         dynamic_parameters: Optional[List[str]] = None,
         per_student_parameters: Optional[Dict[Any, List[str]]] = None,
+        header_image_url: Optional[str] = None,
     ):
         from asgiref.sync import sync_to_async
         from django.conf import settings
@@ -146,6 +152,7 @@ class CampaignService:
                     template_name=template_name,
                     language_code=language_code,
                     parameters=params,
+                    header_image_url=header_image_url,
                 )
 
                 @sync_to_async
@@ -208,6 +215,7 @@ class CampaignService:
                     campaign_id=campaign.id,
                     template_name=campaign.template.name,
                     language_code=campaign.template.language,
+                    header_image_url=campaign.header_image_url,
                 )
             )
 

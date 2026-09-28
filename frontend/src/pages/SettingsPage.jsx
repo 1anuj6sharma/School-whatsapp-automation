@@ -6,11 +6,8 @@ import {
   AlertCircle,
   Loader2,
   Smartphone,
-  Key,
   Copy,
   Check,
-  Eye,
-  EyeOff,
   ShieldCheck,
   Globe,
 } from 'lucide-react';
@@ -19,7 +16,6 @@ import { api } from '../services/api';
 export const SettingsPage = ({ showToast }) => {
   const [health, setHealth] = useState(null);
   const [loadingHealth, setLoadingHealth] = useState(true);
-  const [showToken, setShowToken] = useState(false);
   const [copiedKey, setCopiedKey] = useState(null);
 
   // Test Message Form
@@ -327,37 +323,6 @@ export const SettingsPage = ({ showToast }) => {
                 </div>
                 <div className="font-mono text-slate-900 font-bold text-xs tracking-wider">
                   {wa.business_account_id || (loadingHealth ? 'Loading...' : 'Not Configured')}
-                </div>
-              </div>
-
-              {/* Meta Access Token */}
-              <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/80 space-y-1">
-                <div className="flex justify-between items-center text-slate-500 text-[11px] font-medium">
-                  <span className="flex items-center gap-1.5">
-                    <Key className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Meta Access Token</span>
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowToken(!showToken)}
-                      className="text-slate-400 hover:text-slate-700 flex items-center gap-1 cursor-pointer transition-colors"
-                    >
-                      {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      <span className="text-[10px]">{showToken ? 'Hide' : 'Show'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(wa.access_token, 'token')}
-                      className="text-slate-400 hover:text-slate-700 flex items-center gap-1 cursor-pointer transition-colors"
-                    >
-                      {copiedKey === 'token' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span className="text-[10px]">{copiedKey === 'token' ? 'Copied' : 'Copy'}</span>
-                    </button>
-                  </div>
-                </div>
-                <div className="font-mono text-slate-800 text-[11px] break-all select-all">
-                  {showToken ? (wa.access_token || 'Not Configured') : (wa.access_token_masked || '••••••••••••••••••••')}
                 </div>
               </div>
 

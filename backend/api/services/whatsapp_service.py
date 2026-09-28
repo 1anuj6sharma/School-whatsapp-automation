@@ -184,7 +184,19 @@ class WhatsAppService:
 
         img_bytes = None
         chosen_filename = local_filename
-        mime_type = "image/png" if local_filename.lower().endswith(".png") else "image/jpeg"
+
+        def _mime_for_filename(fname: str) -> str:
+            fname_lower = fname.lower()
+            if fname_lower.endswith(".png"):
+                return "image/png"
+            elif fname_lower.endswith(".webp"):
+                return "image/webp"
+            elif fname_lower.endswith(".gif"):
+                return "image/gif"
+            else:
+                return "image/jpeg"
+
+        mime_type = _mime_for_filename(local_filename)
 
         for p in candidates:
             if os.path.exists(p) and os.path.isfile(p):
@@ -193,7 +205,7 @@ class WhatsAppService:
                         img_bytes = f.read()
                         if img_bytes:
                             chosen_filename = os.path.basename(p)
-                            mime_type = "image/png" if chosen_filename.lower().endswith(".png") else "image/jpeg"
+                            mime_type = _mime_for_filename(chosen_filename)
                             logger.info(f"[WhatsAppService] Found local broadcast image at {p} ({len(img_bytes)} bytes)")
                             break
                 except Exception as ex:
@@ -202,13 +214,16 @@ class WhatsAppService:
         if not img_bytes and (raw.startswith("http://") or raw.startswith("https://")):
             if "localhost" not in raw and "127.0.0.1" not in raw:
                 try:
-                    async with httpx.AsyncClient(timeout=15.0) as fetch_client:
+                    async with httpx.AsyncClient(timeout=20.0) as fetch_client:
                         r = await fetch_client.get(raw)
                         if r.status_code == 200:
                             img_bytes = r.content
                             ct = r.headers.get("Content-Type", "")
                             if ct:
                                 mime_type = ct.split(";")[0].strip()
+                            logger.info(f"[WhatsAppService] Downloaded image from URL ({len(img_bytes)} bytes, type={mime_type}): {raw[:80]}")
+                        else:
+                            logger.warning(f"[WhatsAppService] Failed to download image from URL (HTTP {r.status_code}): {raw[:80]}")
                 except Exception as e:
                     logger.warning(f"[WhatsAppService] Could not download image from {raw}: {e}")
 
@@ -295,43 +310,49 @@ class WhatsAppService:
         components: List[Dict[str, Any]] = []
 
         # Only add header parameter if template is configured for a header
+        # IMPORTANT: Meta's template message API requires media_id (not link) for reliable delivery.
+        # Using `link` causes intermittent failures when Meta cannot download the image quickly.
+        # We ALWAYS resolve to a media_id by uploading the image to Meta first.
         if (tpl_header_type != "NONE" and tpl_header_type != "TEXT") and header_image_url and header_image_url.strip():
             raw_url = header_image_url.strip()
 
             if raw_url.isdigit() and len(raw_url) > 10:
-                # Direct media ID provided
+                # Already a direct numeric Meta media_id — use immediately
+                logger.info(f"[WhatsAppService] Using direct numeric media_id for template image header: {raw_url}")
                 components.append({
                     "type": "header",
                     "parameters": [{"type": "image", "image": {"id": raw_url}}]
                 })
-            elif raw_url.startswith("https://") and "localhost" not in raw_url and "127.0.0.1" not in raw_url:
-                # Public HTTPS URL (e.g. Cloudflare tunnel, CDN, S3) - preferred by Meta for templates
-                logger.info(f"[WhatsAppService] Using direct public HTTPS link for template image header: {raw_url}")
-                components.append({
-                    "type": "header",
-                    "parameters": [{"type": "image", "image": {"link": raw_url}}]
-                })
             else:
-                # Local file or localhost URL - upload directly to Meta to obtain media_id
+                # For ALL other cases (public HTTPS URL, local path, localhost URL):
+                # Upload image to Meta to get a stable media_id.
+                # This guarantees delivery because Meta already has the image on its CDN.
+                logger.info(f"[WhatsAppService] Uploading image to Meta for stable media_id: {raw_url[:80]}...")
                 media_id = await self._resolve_image_media_id(raw_url)
                 if media_id:
+                    logger.info(f"[WhatsAppService] Using uploaded Meta media_id for template: {media_id}")
                     components.append({
                         "type": "header",
                         "parameters": [{"type": "image", "image": {"id": media_id}}]
                     })
-                elif raw_url.startswith("https://"):
-                    components.append({
-                        "type": "header",
-                        "parameters": [{"type": "image", "image": {"link": raw_url}}]
-                    })
                 else:
-                    err_msg = f"Could not resolve or upload image header for '{raw_url}'."
-                    logger.error(f"[WhatsAppService] {err_msg}")
-                    return {
-                        "success": False,
-                        "error": err_msg,
-                        "meta_error": {"type": "MediaError", "message": err_msg},
-                    }
+                    # Final fallback: send link directly (only for public URLs, may be unreliable)
+                    if raw_url.startswith("https://") and "localhost" not in raw_url and "127.0.0.1" not in raw_url:
+                        logger.warning(
+                            f"[WhatsAppService] Could not upload image to Meta, falling back to link (may be unreliable): {raw_url}"
+                        )
+                        components.append({
+                            "type": "header",
+                            "parameters": [{"type": "image", "image": {"link": raw_url}}]
+                        })
+                    else:
+                        err_msg = f"Could not resolve or upload image header for '{raw_url}'. Image must be accessible (public URL or local file)."
+                        logger.error(f"[WhatsAppService] {err_msg}")
+                        return {
+                            "success": False,
+                            "error": err_msg,
+                            "meta_error": {"type": "MediaError", "message": err_msg},
+                        }
         elif (tpl_header_type == "TEXT" or not tpl_header_type) and header_text and header_text.strip():
             components.append({
                 "type": "header",

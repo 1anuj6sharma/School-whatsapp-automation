@@ -131,14 +131,14 @@ export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose, currentUser,
           </div>
         )}
 
-        {/* Meta API Status Badge in footer */}
+        {/* Inverosoft Communication Channel Badge in footer */}
         <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Meta Cloud API v26.0</span>
+            <span>Inverosoft</span>
           </div>
           <p className="text-[10px] text-slate-500 mt-1 leading-normal font-normal">
-            Real WhatsApp Graph API engine.
+            Whatsapp Communication Channel
           </p>
         </div>
       </div>

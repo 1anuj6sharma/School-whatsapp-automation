@@ -14,6 +14,7 @@ export const StudentsPage = ({ showToast }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
   const [optInFilter, setOptInFilter] = useState('ALL');
+  const [feeFilter, setFeeFilter] = useState('ALL');
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
@@ -24,6 +25,7 @@ export const StudentsPage = ({ showToast }) => {
   // Import states
   const [importFile, setImportFile] = useState(null);
   const [importClassId, setImportClassId] = useState('');
+  const [resetAbsentFees, setResetAbsentFees] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -48,6 +50,7 @@ export const StudentsPage = ({ showToast }) => {
           class_id: selectedClassId ? Number(selectedClassId) : undefined,
           search: searchTerm ? searchTerm : undefined,
           opt_in: optInFilter === 'ALL' ? undefined : optInFilter === 'OPTED_IN',
+          fees_filter: feeFilter === 'ALL' ? undefined : feeFilter,
         }),
       ]);
       setClasses(classesData);
@@ -65,7 +68,7 @@ export const StudentsPage = ({ showToast }) => {
 
   useEffect(() => {
     fetchData();
-  }, [selectedClassId, optInFilter]);
+  }, [selectedClassId, optInFilter, feeFilter]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -187,6 +190,24 @@ export const StudentsPage = ({ showToast }) => {
     }
   };
 
+  const handleClearStudentFees = async (student) => {
+    try {
+      await api.updateStudent(student.id, {
+        fees_due: 0,
+      });
+      if (showToast) {
+        showToast({
+          type: 'success',
+          title: 'Fees Cleared',
+          message: `Cleared dues for ${student.student_name}. Marked as ₹0 (Paid).`,
+        });
+      }
+      fetchData();
+    } catch (err) {
+      if (showToast) showToast({ type: 'error', title: 'Failed to clear student fees' });
+    }
+  };
+
   const handleImportSubmit = async (e) => {
     e.preventDefault();
     if (!importFile) {
@@ -201,6 +222,7 @@ export const StudentsPage = ({ showToast }) => {
       if (importClassId) {
         formData.append('class_id', importClassId);
       }
+      formData.append('reset_absent_fees', resetAbsentFees ? 'true' : 'false');
 
       const result = await api.importStudents(formData);
       if (showToast) {
@@ -213,6 +235,7 @@ export const StudentsPage = ({ showToast }) => {
       setShowImportModal(false);
       setImportFile(null);
       setImportClassId('');
+      setResetAbsentFees(false);
       fetchData();
     } catch (err) {
       if (showToast) {
@@ -316,20 +339,30 @@ export const StudentsPage = ({ showToast }) => {
           <select
             value={selectedClassId}
             onChange={(e) => setSelectedClassId(e.target.value)}
-            className="w-full sm:w-auto bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs font-medium"
+            className="w-full sm:w-auto bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs font-medium cursor-pointer"
           >
             <option value="">All Classes</option>
             {classes.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name}
+                {c.name} {c.section ? `(${c.section})` : ''}
               </option>
             ))}
           </select>
 
           <select
+            value={feeFilter}
+            onChange={(e) => setFeeFilter(e.target.value)}
+            className="w-full sm:w-auto bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs font-medium cursor-pointer"
+          >
+            <option value="ALL">💰 All Fee Status</option>
+            <option value="PENDING">🟠 Fees Due (₹ &gt; 0)</option>
+            <option value="PAID">🟢 Fees Paid (₹0)</option>
+          </select>
+
+          <select
             value={optInFilter}
             onChange={(e) => setOptInFilter(e.target.value)}
-            className="w-full sm:w-auto bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs font-medium"
+            className="w-full sm:w-auto bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs font-medium cursor-pointer"
           >
             <option value="ALL">All Consent Status</option>
             <option value="OPTED_IN">Opted In Only</option>
@@ -370,9 +403,18 @@ export const StudentsPage = ({ showToast }) => {
                     <td className="px-6 py-4 font-bold text-slate-900">{student.student_name}</td>
                     <td className="px-6 py-4 text-slate-600">{student.parent_name || '-'}</td>
                     <td className="px-6 py-4">
-                      <span className="px-2.5 py-1 rounded-md bg-slate-100 text-sky-800 text-xs font-semibold border border-slate-200">
-                        {student.class_name || `Class #${student.class_id}`}
-                      </span>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="px-2.5 py-1 rounded-md bg-slate-100 text-sky-800 text-xs font-semibold border border-slate-200 inline-block w-fit">
+                          {student.class_name
+                            ? student.class_name.split(' - ')[0]
+                            : `Class #${student.class_id}`}
+                        </span>
+                        {student.class_section && (
+                          <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-600 text-[10px] font-bold border border-sky-100 inline-block w-fit">
+                            Section {student.class_section}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-4 font-mono text-xs text-slate-700">
                       +{student.whatsapp_number}
@@ -381,9 +423,11 @@ export const StudentsPage = ({ showToast }) => {
                       <span className={`px-2.5 py-1 rounded-md text-xs font-bold font-mono ${
                         Number(student.fees_due || 0) > 0 
                           ? 'bg-amber-50 text-amber-800 border border-amber-200' 
-                          : 'bg-slate-50 text-slate-500 border border-slate-200'
+                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       }`}>
-                        ₹{Number(student.fees_due || 0).toLocaleString('en-IN')}
+                        {Number(student.fees_due || 0) > 0
+                          ? `₹${Number(student.fees_due).toLocaleString('en-IN')} Due`
+                          : '₹0 Paid'}
                       </span>
                     </td>
                     <td className="px-6 py-4">
@@ -410,10 +454,19 @@ export const StudentsPage = ({ showToast }) => {
                       </button>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {Number(student.fees_due || 0) > 0 && (
+                          <button
+                            onClick={() => handleClearStudentFees(student)}
+                            className="px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-bold transition-all shrink-0 cursor-pointer"
+                            title="Mark Fee as Paid (₹0)"
+                          >
+                            Clear (₹0)
+                          </button>
+                        )}
                         <button
                           onClick={() => openEditModal(student)}
-                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 border border-slate-200 transition-colors"
+                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 border border-slate-200 transition-colors cursor-pointer"
                           title="Edit"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
@@ -423,7 +476,7 @@ export const StudentsPage = ({ showToast }) => {
                             setDeletingStudent(student);
                             setShowDeleteModal(true);
                           }}
-                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 hover:border-rose-200 transition-colors"
+                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 hover:border-rose-200 transition-colors cursor-pointer"
                           title="Delete"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -775,7 +828,7 @@ export const StudentsPage = ({ showToast }) => {
             <select
               value={importClassId}
               onChange={(e) => setImportClassId(e.target.value)}
-              className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs"
+              className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs cursor-pointer"
             >
               <option value="">✨ Auto-detect &amp; Create Classes from Spreadsheet Columns</option>
               {classes.map((c) => (
@@ -786,6 +839,25 @@ export const StudentsPage = ({ showToast }) => {
             </select>
             <p className="text-[10px] text-slate-400 mt-1">
               Leave on Auto-detect to create or map classes directly from the sheet columns.
+            </p>
+          </div>
+
+          {/* Fee Defaulters Sync Mode Checkbox */}
+          <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-2xl space-y-1.5">
+            <div className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                id="reset_absent_fees"
+                checked={resetAbsentFees}
+                onChange={(e) => setResetAbsentFees(e.target.checked)}
+                className="mt-0.5 rounded bg-white border-amber-400 text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+              />
+              <label htmlFor="reset_absent_fees" className="text-xs font-bold text-amber-950 cursor-pointer select-none">
+                Fee Defaulters Sync Mode (Auto-Clear fees for paid students)
+              </label>
+            </div>
+            <p className="text-[11px] text-amber-900/80 leading-relaxed pl-6">
+              Enable this if your spreadsheet contains <strong>only students who currently owe fees</strong>. Any existing students in the imported classes who are not in this sheet will have their dues auto-set to <strong>₹0 (Paid)</strong>. Other classes not in the sheet remain untouched.
             </p>
           </div>
 

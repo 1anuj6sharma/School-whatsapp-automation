@@ -151,6 +151,9 @@ export const api = {
     if (params?.opt_in !== undefined && params?.opt_in !== null) {
       url.searchParams.append('opt_in', params.opt_in.toString());
     }
+    if (params?.fees_filter) {
+      url.searchParams.append('fees_filter', params.fees_filter);
+    }
 
     const res = await fetch(url.pathname + url.search);
     return handleResponse(res);

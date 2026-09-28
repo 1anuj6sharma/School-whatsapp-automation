@@ -38,7 +38,8 @@ class ClassUpdateSerializer(serializers.ModelSerializer):
 
 class StudentSerializer(serializers.ModelSerializer):
     class_id = serializers.IntegerField(source="school_class_id")
-    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    class_name = serializers.SerializerMethodField()
+    class_section = serializers.CharField(source="school_class.section", read_only=True, allow_null=True)
 
     class Meta:
         model = Student
@@ -53,7 +54,15 @@ class StudentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "class_name",
+            "class_section",
         ]
+
+    def get_class_name(self, obj):
+        if not obj.school_class:
+            return "General"
+        if obj.school_class.section:
+            return f"{obj.school_class.name} - {obj.school_class.section}"
+        return obj.school_class.name
 
 
 class StudentCreateSerializer(serializers.ModelSerializer):

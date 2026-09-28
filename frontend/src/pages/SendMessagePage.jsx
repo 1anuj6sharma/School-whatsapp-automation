@@ -218,6 +218,21 @@ export const SendMessagePage = ({
     if (matching) {
       setSelectedTemplateId(matching.id);
     }
+
+    // Update student selection & preview based on the newly selected workflow
+    let eligible = students;
+    if (workflow === 'FEES') {
+      eligible = students.filter((s) => Number(s.fees_due || 0) > 0);
+    }
+    const optedInIds = eligible.filter((s) => s.whatsapp_opt_in).map((s) => s.id);
+    setSelectedStudentIds(optedInIds);
+    if (eligible.length > 0) {
+      setPreviewStudentId(eligible[0].id);
+    } else if (students.length > 0) {
+      setPreviewStudentId(students[0].id);
+    } else {
+      setPreviewStudentId(null);
+    }
   };
 
   // Fetch students whenever selectedClassIds change
@@ -234,10 +249,18 @@ export const SendMessagePage = ({
       try {
         const data = await api.getStudents({ class_ids: selectedClassIds });
         setStudents(data);
-        // By default, select all opted-in students across all selected classes
-        const optedInIds = data.filter((s) => s.whatsapp_opt_in).map((s) => s.id);
+
+        let eligible = data;
+        if (activeWorkflow === 'FEES') {
+          eligible = data.filter((s) => Number(s.fees_due || 0) > 0);
+        }
+
+        // By default, select all opted-in eligible students across selected classes
+        const optedInIds = eligible.filter((s) => s.whatsapp_opt_in).map((s) => s.id);
         setSelectedStudentIds(optedInIds);
-        if (data.length > 0) {
+        if (eligible.length > 0) {
+          setPreviewStudentId(eligible[0].id);
+        } else if (data.length > 0) {
           setPreviewStudentId(data[0].id);
         } else {
           setPreviewStudentId(null);
@@ -319,7 +342,7 @@ export const SendMessagePage = ({
     try {
       const objectUrl = URL.createObjectURL(file);
       setLocalPreviewUrl(objectUrl);
-    } catch (_) {}
+    } catch (_) { }
 
     setImageUploading(true);
     try {
@@ -425,21 +448,32 @@ export const SendMessagePage = ({
     return resolved;
   };
 
+  // Workflow-eligible students (For FEES: only students with pending fees > 0. For others: all class students)
+  const workflowStudents = useMemo(() => {
+    if (activeWorkflow === 'FEES') {
+      return students.filter((s) => Number(s.fees_due || 0) > 0);
+    }
+    return students;
+  }, [students, activeWorkflow]);
+
   // Selected student for preview
-  const previewStudent = students.find((s) => s.id === previewStudentId) || students[0];
+  const previewStudent =
+    workflowStudents.find((s) => s.id === previewStudentId) ||
+    workflowStudents[0] ||
+    students[0];
 
   // Filtered students for checklist search
   const filteredStudents = useMemo(() => {
-    if (!studentSearchTerm.trim()) return students;
+    if (!studentSearchTerm.trim()) return workflowStudents;
     const term = studentSearchTerm.toLowerCase().trim();
-    return students.filter(
+    return workflowStudents.filter(
       (s) =>
         s.student_name?.toLowerCase().includes(term) ||
         s.parent_name?.toLowerCase().includes(term) ||
         s.whatsapp_number?.includes(term) ||
         s.class_name?.toLowerCase().includes(term)
     );
-  }, [students, studentSearchTerm]);
+  }, [workflowStudents, studentSearchTerm]);
 
   // Render live preview text
   const renderedPreviewText = useMemo(() => {
@@ -463,12 +497,15 @@ export const SendMessagePage = ({
     );
   };
 
-  const optedInStudents = useMemo(() => students.filter((s) => s.whatsapp_opt_in), [students]);
+  const optedInStudents = useMemo(
+    () => workflowStudents.filter((s) => s.whatsapp_opt_in),
+    [workflowStudents]
+  );
   const optedInCount = optedInStudents.length;
   const selectedCount = selectedStudentIds.length;
 
   const handleSelectAllOptedIn = () => {
-    if (selectedCount === optedInCount) {
+    if (selectedCount === optedInCount && optedInCount > 0) {
       setSelectedStudentIds([]);
     } else {
       setSelectedStudentIds(optedInStudents.map((s) => s.id));
@@ -614,18 +651,16 @@ export const SendMessagePage = ({
         <button
           type="button"
           onClick={() => handleWorkflowChange('FEES')}
-          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${
-            activeWorkflow === 'FEES'
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${activeWorkflow === 'FEES'
               ? 'bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-white border-amber-500 ring-2 ring-amber-500/20 shadow-md'
               : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
-          }`}
+            }`}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <div
-                className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${
-                  activeWorkflow === 'FEES' ? 'bg-amber-500 text-white shadow-sm shadow-amber-500/30' : 'bg-amber-100 text-amber-700'
-                }`}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${activeWorkflow === 'FEES' ? 'bg-amber-500 text-white shadow-sm shadow-amber-500/30' : 'bg-amber-100 text-amber-700'
+                  }`}
               >
                 <Receipt className="w-5 h-5" />
               </div>
@@ -651,18 +686,16 @@ export const SendMessagePage = ({
         <button
           type="button"
           onClick={() => handleWorkflowChange('ANNOUNCEMENT')}
-          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${
-            activeWorkflow === 'ANNOUNCEMENT'
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${activeWorkflow === 'ANNOUNCEMENT'
               ? 'bg-gradient-to-br from-purple-500/10 via-purple-500/5 to-white border-purple-500 ring-2 ring-purple-500/20 shadow-md'
               : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
-          }`}
+            }`}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <div
-                className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${
-                  activeWorkflow === 'ANNOUNCEMENT' ? 'bg-purple-600 text-white shadow-sm shadow-purple-600/30' : 'bg-purple-100 text-purple-700'
-                }`}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${activeWorkflow === 'ANNOUNCEMENT' ? 'bg-purple-600 text-white shadow-sm shadow-purple-600/30' : 'bg-purple-100 text-purple-700'
+                  }`}
               >
                 <Megaphone className="w-5 h-5" />
               </div>
@@ -688,18 +721,16 @@ export const SendMessagePage = ({
         <button
           type="button"
           onClick={() => handleWorkflowChange('NORMAL')}
-          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${
-            activeWorkflow === 'NORMAL'
+          className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${activeWorkflow === 'NORMAL'
               ? 'bg-gradient-to-br from-emerald-500/10 via-emerald-500/5 to-white border-emerald-600 ring-2 ring-emerald-600/20 shadow-md'
               : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
-          }`}
+            }`}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <div
-                className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${
-                  activeWorkflow === 'NORMAL' ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30' : 'bg-emerald-100 text-emerald-700'
-                }`}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${activeWorkflow === 'NORMAL' ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30' : 'bg-emerald-100 text-emerald-700'
+                  }`}
               >
                 <Mail className="w-5 h-5" />
               </div>
@@ -749,7 +780,7 @@ export const SendMessagePage = ({
                   {selectedClassIds.length === classes.length ? 'Deselect All' : 'Select All Classes'}
                 </button>
                 <span className="text-xs px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
-                  {students.length} Total Students
+                  {activeWorkflow === 'FEES' ? `${workflowStudents.length} Students with Dues` : `${students.length} Total Students`}
                 </span>
               </div>
             </div>
@@ -763,11 +794,10 @@ export const SendMessagePage = ({
                     key={c.id}
                     type="button"
                     onClick={() => handleToggleClass(c.id)}
-                    className={`p-2.5 rounded-xl border text-left transition-all flex items-center justify-between gap-2 cursor-pointer ${
-                      isChecked
+                    className={`p-2.5 rounded-xl border text-left transition-all flex items-center justify-between gap-2 cursor-pointer ${isChecked
                         ? 'bg-emerald-50/80 border-emerald-500 text-emerald-950 ring-1 ring-emerald-500/20 shadow-xs'
                         : 'bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-white hover:border-slate-300'
-                    }`}
+                      }`}
                   >
                     <div className="truncate">
                       <div className="text-xs font-bold truncate">
@@ -778,9 +808,8 @@ export const SendMessagePage = ({
                       </div>
                     </div>
                     <div
-                      className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${
-                        isChecked ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'
-                      }`}
+                      className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${isChecked ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'
+                        }`}
                     >
                       {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
                     </div>
@@ -943,10 +972,15 @@ export const SendMessagePage = ({
               <div>
                 <label className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <CheckSquare className="w-4 h-4 text-emerald-600" />
-                  <span>3. Class Recipients Checklist ({selectedCount} Selected)</span>
+                  <span>
+                    3. Class Recipients Checklist ({selectedCount}{' '}
+                    {activeWorkflow === 'FEES' ? 'with Dues Selected' : 'Selected'})
+                  </span>
                 </label>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Click a student row to preview their customized WhatsApp notification.
+                  {activeWorkflow === 'FEES'
+                    ? 'Filtered to students with pending fees (₹ > 0). Click a student row to preview their message.'
+                    : 'Click a student row to preview their customized WhatsApp notification.'}
                 </p>
               </div>
 
@@ -968,7 +1002,11 @@ export const SendMessagePage = ({
                 type="text"
                 value={studentSearchTerm}
                 onChange={(e) => setStudentSearchTerm(e.target.value)}
-                placeholder="Search student name, parent name, or phone number..."
+                placeholder={
+                  activeWorkflow === 'FEES'
+                    ? 'Search among students with pending fees...'
+                    : 'Search student name, parent name, or phone number...'
+                }
                 className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-emerald-600 focus:bg-white"
               />
             </div>
@@ -978,9 +1016,18 @@ export const SendMessagePage = ({
                 <Loader2 className="w-6 h-6 animate-spin text-emerald-600 mb-2" />
                 <span>Loading students from selected classes...</span>
               </div>
-            ) : students.length === 0 ? (
-              <div className="py-8 text-center text-slate-400 text-xs bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                No students found in the selected classes.
+            ) : workflowStudents.length === 0 ? (
+              <div className="py-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-dashed border-slate-200 p-4 space-y-1">
+                <div className="font-bold text-slate-700">
+                  {activeWorkflow === 'FEES'
+                    ? 'No students with pending fees found in the selected classes.'
+                    : 'No students found in the selected classes.'}
+                </div>
+                {activeWorkflow === 'FEES' && (
+                  <p className="text-slate-400 text-[11px]">
+                    All students in the selected classes currently have zero fee balance.
+                  </p>
+                )}
               </div>
             ) : (
               <div className="max-h-72 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
@@ -994,9 +1041,8 @@ export const SendMessagePage = ({
                     <div
                       key={s.id}
                       onClick={() => setPreviewStudentId(s.id)}
-                      className={`p-3 flex items-center justify-between text-xs transition-colors cursor-pointer ${
-                        isPreviewing ? 'bg-emerald-50/70' : 'hover:bg-slate-50'
-                      }`}
+                      className={`p-3 flex items-center justify-between text-xs transition-colors cursor-pointer ${isPreviewing ? 'bg-emerald-50/70' : 'hover:bg-slate-50'
+                        }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <button
@@ -1006,13 +1052,12 @@ export const SendMessagePage = ({
                             e.stopPropagation();
                             if (isOptedIn) handleToggleStudent(s.id);
                           }}
-                          className={`w-5 h-5 rounded-md flex items-center justify-center transition-colors shrink-0 ${
-                            !isOptedIn
+                          className={`w-5 h-5 rounded-md flex items-center justify-center transition-colors shrink-0 ${!isOptedIn
                               ? 'bg-slate-100 border-slate-200 text-slate-300 cursor-not-allowed'
                               : isSelected
-                              ? 'bg-emerald-600 text-white'
-                              : 'border border-slate-300 bg-white hover:border-emerald-500'
-                          }`}
+                                ? 'bg-emerald-600 text-white'
+                                : 'border border-slate-300 bg-white hover:border-emerald-500'
+                            }`}
                         >
                           {isSelected && <CheckSquare className="w-4 h-4" />}
                         </button>
@@ -1042,11 +1087,10 @@ export const SendMessagePage = ({
                       <div className="flex items-center gap-2.5 shrink-0 ml-2">
                         {/* Fees Due Badge */}
                         <div
-                          className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
-                            feesAmount > 0
+                          className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${feesAmount > 0
                               ? 'bg-amber-50 text-amber-800 border-amber-200'
                               : 'bg-slate-50 text-slate-600 border-slate-200'
-                          }`}
+                            }`}
                         >
                           ₹{feesAmount.toLocaleString('en-IN')}
                         </div>

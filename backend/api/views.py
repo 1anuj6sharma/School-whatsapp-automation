@@ -110,6 +110,7 @@ class StudentListCreateView(APIView):
         class_ids = request.query_params.get("class_ids")
         search = request.query_params.get("search")
         opt_in = request.query_params.get("opt_in")
+        fees_filter = request.query_params.get("fees_filter")
 
         qs = Student.objects.select_related("school_class").order_by("student_name")
 
@@ -121,6 +122,10 @@ class StudentListCreateView(APIView):
             qs = qs.filter(school_class_id=class_id)
         if opt_in is not None and opt_in != "":
             qs = qs.filter(whatsapp_opt_in=(opt_in.lower() == "true"))
+        if fees_filter == "PENDING":
+            qs = qs.filter(fees_due__gt=0)
+        elif fees_filter == "PAID":
+            qs = qs.filter(Q(fees_due=0) | Q(fees_due__isnull=True))
         if search:
             s_term = search.strip()
             qs = qs.filter(
@@ -142,6 +147,7 @@ class StudentListCreateView(APIView):
             student_name=data["student_name"].strip(),
             parent_name=data.get("parent_name", "").strip() if data.get("parent_name") else None,
             whatsapp_number=data["whatsapp_number"],
+            fees_due=data.get("fees_due", 0.0),
             whatsapp_opt_in=data.get("whatsapp_opt_in", True),
         )
         return Response(StudentSerializer(student).data, status=status.HTTP_201_CREATED)
@@ -177,6 +183,8 @@ class StudentDetailView(APIView):
             student.parent_name = vdata["parent_name"].strip() if vdata["parent_name"] else None
         if "whatsapp_number" in vdata:
             student.whatsapp_number = vdata["whatsapp_number"]
+        if "fees_due" in vdata:
+            student.fees_due = vdata["fees_due"]
         if "whatsapp_opt_in" in vdata:
             student.whatsapp_opt_in = vdata["whatsapp_opt_in"]
 
@@ -200,6 +208,7 @@ class StudentImportCSVView(APIView):
         file = request.FILES["file"]
         default_class_id = request.data.get("class_id")
         default_class = Class.objects.filter(id=default_class_id).first() if default_class_id else None
+        sync_fees_mode = str(request.data.get("reset_absent_fees", request.data.get("sync_fees_mode", "false"))).lower() in ("true", "1", "yes")
 
         filename = file.name.lower()
         try:
@@ -232,6 +241,8 @@ class StudentImportCSVView(APIView):
         skipped_count = 0
         classes_created = 0
         classes_cache = {}
+        touched_class_ids = set()
+        imported_student_ids = set()
 
         students_to_create = []
         for _, row in df.iterrows():
@@ -281,6 +292,8 @@ class StudentImportCSVView(APIView):
                 if created_flag:
                     classes_created += 1
 
+            touched_class_ids.add(target_class.id)
+
             # Check if student already exists (upsert / update detail)
             existing_student = Student.objects.filter(
                 school_class=target_class,
@@ -291,6 +304,7 @@ class StudentImportCSVView(APIView):
             ).first()
 
             if existing_student:
+                imported_student_ids.add(existing_student.id)
                 changed = False
                 if existing_student.student_name != name_val:
                     existing_student.student_name = name_val
@@ -323,10 +337,32 @@ class StudentImportCSVView(APIView):
                 )
 
         if students_to_create:
-            Student.objects.bulk_create(students_to_create)
+            created_instances = Student.objects.bulk_create(students_to_create)
             created_count = len(students_to_create)
+            # Re-fetch newly created IDs to exclude from reset
+            new_ids = Student.objects.filter(
+                school_class_id__in=touched_class_ids,
+                whatsapp_number__in=[s.whatsapp_number for s in students_to_create]
+            ).values_list("id", flat=True)
+            imported_student_ids.update(new_ids)
 
-        msg = f"Import complete: {created_count} added, {updated_count} updated ({skipped_count} skipped/unchanged)."
+        # Handle Fee Defaulters Sync Mode: Auto-clear fees to ₹0 for other students in touched classes
+        reset_count = 0
+        if sync_fees_mode and fees_col and touched_class_ids:
+            reset_count = Student.objects.filter(
+                school_class_id__in=touched_class_ids
+            ).exclude(
+                id__in=imported_student_ids
+            ).filter(
+                fees_due__gt=0
+            ).update(fees_due=0.00)
+            logger.info(f"[Import] Fee Defaulters Sync: Auto-cleared dues for {reset_count} paid students in touched classes.")
+
+        msg = f"Import complete: {created_count} added, {updated_count} updated."
+        if reset_count > 0:
+            msg += f" {reset_count} paid students in imported classes auto-cleared to ₹0."
+        if skipped_count > 0:
+            msg += f" ({skipped_count} unchanged)."
         if classes_created > 0:
             msg += f" Auto-created {classes_created} new class(es)."
 
@@ -334,6 +370,7 @@ class StudentImportCSVView(APIView):
             "message": msg,
             "imported_count": created_count,
             "updated_count": updated_count,
+            "reset_count": reset_count,
             "skipped_count": skipped_count,
             "classes_created_count": classes_created
         })

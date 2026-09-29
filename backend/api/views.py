@@ -935,6 +935,12 @@ class ConversationDetailView(APIView):
         for log_entry in unmirrored_logs:
             tpl = MessageTemplate.objects.filter(name=log_entry.template_name).first()
             body_preview = tpl.body_preview if tpl else f"Template: {log_entry.template_name}"
+            media_img = None
+            if log_entry.campaign and log_entry.campaign.header_image_url:
+                media_img = log_entry.campaign.header_image_url
+            elif tpl and (tpl.header_type or "").upper() == "IMAGE":
+                media_img = tpl.sample_image_url
+
             new_chat_msg = ChatMessage.objects.create(
                 student=log_entry.student or student,
                 phone_number=log_entry.recipient_number,
@@ -942,12 +948,22 @@ class ConversationDetailView(APIView):
                 message_type="template",
                 template_name=log_entry.template_name,
                 text_content=body_preview,
+                media_url=media_img,
                 status=log_entry.status,
                 whatsapp_message_id=log_entry.whatsapp_message_id,
                 message_log=log_entry,
                 created_at=log_entry.sent_at or log_entry.created_at,
             )
             chat_messages.append(new_chat_msg)
+
+        # Attach image media_url if message template has an image header
+        for m in chat_messages:
+            if not m.media_url and m.template_name:
+                tpl = MessageTemplate.objects.filter(name=m.template_name).first()
+                if tpl and (tpl.header_type or "").upper() == "IMAGE" and tpl.sample_image_url:
+                    m.media_url = tpl.sample_image_url
+            if not m.media_url and m.message_log and m.message_log.campaign and m.message_log.campaign.header_image_url:
+                m.media_url = m.message_log.campaign.header_image_url
 
         chat_messages.sort(key=lambda m: m.created_at)
 

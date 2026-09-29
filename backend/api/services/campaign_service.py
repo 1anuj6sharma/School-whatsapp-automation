@@ -212,6 +212,8 @@ class CampaignService:
                             for idx, val in enumerate(params, start=1):
                                 body_preview = body_preview.replace(f"{{{{{idx}}}}}", str(val)).replace(f"{{{idx}}}", str(val))
 
+                        media_img = header_image_url or (tpl.sample_image_url if tpl and (tpl.header_type or "").upper() == "IMAGE" else None)
+
                         ChatMessage.objects.create(
                             student=log_rec.student,
                             phone_number=log_rec.recipient_number,
@@ -219,6 +221,7 @@ class CampaignService:
                             message_type="template",
                             template_name=template_name,
                             text_content=body_preview,
+                            media_url=media_img,
                             status=log_rec.status,
                             whatsapp_message_id=log_rec.whatsapp_message_id,
                             message_log=log_rec,

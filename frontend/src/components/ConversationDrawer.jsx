@@ -259,6 +259,30 @@ export const ConversationDrawer = ({
                         </div>
                       )}
 
+                      {/* Media Image Attachment */}
+                      {msg.media_url && (
+                        <div className="mb-2.5 overflow-hidden rounded-xl border border-black/10 shadow-xs bg-black/5">
+                          <img
+                            src={
+                              msg.media_url.startsWith('http') || msg.media_url.startsWith('data:')
+                                ? msg.media_url
+                                : `${window.location.origin}${msg.media_url.startsWith('/') ? '' : '/'}${msg.media_url}`
+                            }
+                            alt="Attachment"
+                            className="w-full max-h-56 object-cover rounded-xl hover:opacity-95 transition-opacity cursor-pointer"
+                            onClick={() => {
+                              const fullUrl = msg.media_url.startsWith('http')
+                                ? msg.media_url
+                                : `${window.location.origin}${msg.media_url.startsWith('/') ? '' : '/'}${msg.media_url}`;
+                              window.open(fullUrl, '_blank');
+                            }}
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                        </div>
+                      )}
+
                       {/* Content Body */}
                       <p className="text-xs sm:text-[13px] leading-relaxed whitespace-pre-wrap break-words font-sans">
                         {msg.text_content || `[${msg.message_type || 'Message'}]`}

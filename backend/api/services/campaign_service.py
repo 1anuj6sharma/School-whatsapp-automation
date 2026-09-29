@@ -3,7 +3,7 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from django.utils import timezone
-from api.models import Class, Student, MessageTemplate, MessageCampaign, MessageLog
+from api.models import Class, Student, MessageTemplate, MessageCampaign, MessageLog, ChatMessage
 from api.services.whatsapp_service import whatsapp_service
 from api.utils.logger import logger
 from api.utils.phone import mask_phone_number
@@ -204,6 +204,28 @@ class CampaignService:
                         log_rec.failed_at = now_time
                         log_rec.error_message = result.get("error")
                     log_rec.save()
+
+                    try:
+                        tpl = MessageTemplate.objects.filter(name=template_name).first()
+                        body_preview = tpl.body_preview if tpl else f"Template: {template_name}"
+                        if body_preview and params:
+                            for idx, val in enumerate(params, start=1):
+                                body_preview = body_preview.replace(f"{{{{{idx}}}}}", str(val)).replace(f"{{{idx}}}", str(val))
+
+                        ChatMessage.objects.create(
+                            student=log_rec.student,
+                            phone_number=log_rec.recipient_number,
+                            direction="OUTBOUND",
+                            message_type="template",
+                            template_name=template_name,
+                            text_content=body_preview,
+                            status=log_rec.status,
+                            whatsapp_message_id=log_rec.whatsapp_message_id,
+                            message_log=log_rec,
+                            created_at=now_time,
+                        )
+                    except Exception as ex:
+                        logger.warning(f"[CampaignService] Could not mirror to ChatMessage: {ex}")
 
                     campaign = MessageCampaign.objects.get(id=campaign_id)
                     if result.get("success"):

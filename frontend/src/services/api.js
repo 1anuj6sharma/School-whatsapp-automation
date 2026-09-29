@@ -283,4 +283,20 @@ export const api = {
     });
     return handleResponse(res);
   },
+
+  // WhatsApp Conversations
+  async getConversation(phoneOrStudentId) {
+    const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(phoneOrStudentId)}`);
+    return handleResponse(res);
+  },
+
+  async sendConversationMessage(data) {
+    const res = await fetch(`${API_BASE}/api/conversations/send-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
 };
+

@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog
+from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog, ChatMessage
 from .serializers import (
     ClassSerializer,
     ClassCreateSerializer,
@@ -29,6 +29,8 @@ from .serializers import (
     CampaignCreateSerializer,
     MessageLogSerializer,
     TestMessageSerializer,
+    ChatMessageSerializer,
+    SendConversationMessageSerializer,
 )
 from .services.whatsapp_service import whatsapp_service
 from .services.campaign_service import campaign_service
@@ -625,20 +627,64 @@ class TestMessageView(APIView):
         serializer.is_valid(raise_exception=True)
         vdata = serializer.validated_data
 
+        recipient_number = vdata["recipient_number"]
+        template_name = vdata["template_name"]
+        language_code = vdata["language_code"]
+
         logger.info(
-            f"[MessagesRouter] Test message request for recipient: {vdata['recipient_number']} using template: {vdata['template_name']}"
+            f"[MessagesRouter] Test message request for recipient: {recipient_number} using template: {template_name}"
         )
         result = asyncio.run(
             whatsapp_service.send_template_message(
-                recipient_number=vdata["recipient_number"],
-                template_name=vdata["template_name"],
-                language_code=vdata["language_code"],
+                recipient_number=recipient_number,
+                template_name=template_name,
+                language_code=language_code,
             )
         )
 
+        clean_recipient = sanitize_phone_number(recipient_number)
+        student = Student.objects.filter(whatsapp_number=clean_recipient).first()
+        if not student and len(clean_recipient) >= 10:
+            student = Student.objects.filter(whatsapp_number__endswith=clean_recipient[-10:]).first()
+
+        wamid = result.get("message_id")
+        succ = result.get("success", False)
+
+        tpl = MessageTemplate.objects.filter(name=template_name).first()
+        body_preview = tpl.body_preview if tpl else f"Template: {template_name}"
+
+        # Create MessageLog
+        log_entry = MessageLog.objects.create(
+            student=student,
+            recipient_number=clean_recipient,
+            template_name=template_name,
+            status="SENT" if succ else "FAILED",
+            whatsapp_message_id=wamid,
+            error_message=result.get("error") if not succ else None,
+            sent_at=timezone.now() if succ else None,
+            failed_at=timezone.now() if not succ else None,
+        )
+
+        # Mirror to ChatMessage
+        try:
+            ChatMessage.objects.create(
+                student=student,
+                phone_number=clean_recipient,
+                direction="OUTBOUND",
+                message_type="template",
+                template_name=template_name,
+                text_content=body_preview,
+                status="SENT" if succ else "FAILED",
+                whatsapp_message_id=wamid,
+                message_log=log_entry,
+                created_at=timezone.now(),
+            )
+        except Exception as ex:
+            logger.warning(f"[TestMessageView] Failed to mirror to ChatMessage: {ex}")
+
         return Response({
-            "success": result.get("success", False),
-            "message_id": result.get("message_id"),
+            "success": succ,
+            "message_id": wamid,
             "recipient": result.get("recipient"),
             "error": result.get("error"),
             "meta_error": result.get("meta_error"),
@@ -670,8 +716,9 @@ class WhatsAppWebhookView(APIView):
             changes = entry.get("changes", [])
             for change in changes:
                 value = change.get("value", {})
-                statuses = value.get("statuses", [])
 
+                # 1. Process Status Updates (SENT, DELIVERED, READ, FAILED)
+                statuses = value.get("statuses", [])
                 for status_item in statuses:
                     message_id = status_item.get("id")
                     new_status = status_item.get("status", "").upper()
@@ -708,6 +755,108 @@ class WhatsAppWebhookView(APIView):
                                 )
                         log_entry.save()
 
+                    # Update ChatMessage status if mirrored
+                    ChatMessage.objects.filter(whatsapp_message_id=message_id).update(status=new_status)
+
+                # 2. Process Incoming User Messages (Inbound replies)
+                messages = value.get("messages", [])
+                contacts = value.get("contacts", [])
+
+                contacts_map = {}
+                for c in contacts:
+                    wa_id = c.get("wa_id")
+                    name = c.get("profile", {}).get("name")
+                    if wa_id and name:
+                        contacts_map[wa_id] = name
+
+                for msg_item in messages:
+                    msg_from = msg_item.get("from", "")
+                    wamid = msg_item.get("id")
+                    msg_type = msg_item.get("type", "text")
+                    timestamp_str = msg_item.get("timestamp")
+                    event_time = (
+                        datetime.utcfromtimestamp(int(timestamp_str))
+                        if timestamp_str and timestamp_str.isdigit()
+                        else timezone.now()
+                    )
+
+                    if not msg_from:
+                        continue
+
+                    clean_phone = sanitize_phone_number(msg_from)
+                    sender_name = contacts_map.get(msg_from) or contacts_map.get(clean_phone)
+
+                    extracted_text = ""
+                    media_url = None
+                    if msg_type == "text":
+                        extracted_text = msg_item.get("text", {}).get("body", "")
+                    elif msg_type == "interactive":
+                        interactive = msg_item.get("interactive", {})
+                        btn = interactive.get("button_reply", {})
+                        lst = interactive.get("list_reply", {})
+                        extracted_text = btn.get("title") or lst.get("title") or "[Interactive Reply]"
+                    elif msg_type == "button":
+                        extracted_text = msg_item.get("button", {}).get("text", "[Button Click]")
+                    elif msg_type == "image":
+                        caption = msg_item.get("image", {}).get("caption", "")
+                        extracted_text = f"📷 Photo: {caption}" if caption else "📷 Photo"
+                    elif msg_type == "document":
+                        filename = msg_item.get("document", {}).get("filename", "")
+                        extracted_text = f"📄 Document: {filename}" if filename else "📄 Document"
+                    elif msg_type in ("audio", "voice"):
+                        extracted_text = "🎵 Voice Note / Audio"
+                    elif msg_type == "video":
+                        caption = msg_item.get("video", {}).get("caption", "")
+                        extracted_text = f"🎥 Video: {caption}" if caption else "🎥 Video"
+                    elif msg_type == "location":
+                        loc = msg_item.get("location", {})
+                        loc_name = loc.get("name") or loc.get("address") or f"{loc.get('latitude')}, {loc.get('longitude')}"
+                        extracted_text = f"📍 Location: {loc_name}"
+                    elif msg_type == "reaction":
+                        emoji = msg_item.get("reaction", {}).get("emoji", "")
+                        extracted_text = f"Reacted: {emoji}"
+                    else:
+                        extracted_text = f"[{msg_type.capitalize()} message]"
+
+                    # Match student
+                    student = Student.objects.filter(whatsapp_number=clean_phone).first()
+                    if not student and len(clean_phone) >= 10:
+                        student = Student.objects.filter(whatsapp_number__endswith=clean_phone[-10:]).first()
+
+                    if wamid:
+                        chat_msg, created = ChatMessage.objects.get_or_create(
+                            whatsapp_message_id=wamid,
+                            defaults={
+                                "student": student,
+                                "phone_number": clean_phone,
+                                "sender_name": sender_name or (student.student_name if student else None),
+                                "direction": "INBOUND",
+                                "message_type": msg_type,
+                                "text_content": extracted_text,
+                                "media_url": media_url,
+                                "status": "RECEIVED",
+                                "raw_payload": msg_item,
+                                "created_at": event_time,
+                            }
+                        )
+                        if created:
+                            logger.info(f"[Webhook] Saved incoming WhatsApp message from {clean_phone}: '{extracted_text}'")
+                    else:
+                        ChatMessage.objects.create(
+                            student=student,
+                            phone_number=clean_phone,
+                            sender_name=sender_name or (student.student_name if student else None),
+                            direction="INBOUND",
+                            message_type=msg_type,
+                            text_content=extracted_text,
+                            media_url=media_url,
+                            status="RECEIVED",
+                            raw_payload=msg_item,
+                            created_at=event_time,
+                        )
+                        logger.info(f"[Webhook] Saved incoming WhatsApp message from {clean_phone}: '{extracted_text}'")
+
+                # 3. Process Template Status Updates
                 field = change.get("field")
                 if field == "message_template_status_update":
                     template_name = value.get("message_template_name")
@@ -726,6 +875,215 @@ class WhatsAppWebhookView(APIView):
                         tpl.save()
 
         return Response({"status": "ok"})
+
+
+class ConversationDetailView(APIView):
+    def get(self, request, identifier=None):
+        phone = request.query_params.get("phone")
+        student_id = request.query_params.get("student_id")
+
+        if identifier:
+            if str(identifier).isdigit() and len(str(identifier)) <= 8:
+                student_id = identifier
+            else:
+                phone = identifier
+
+        student = None
+        if student_id:
+            student = Student.objects.select_related("school_class").filter(id=student_id).first()
+            if student and not phone:
+                phone = student.whatsapp_number
+
+        if phone:
+            phone = sanitize_phone_number(phone)
+            if not student:
+                student = Student.objects.select_related("school_class").filter(whatsapp_number=phone).first()
+                if not student and len(phone) >= 10:
+                    student = Student.objects.select_related("school_class").filter(whatsapp_number__endswith=phone[-10:]).first()
+
+        if not phone and not student:
+            return Response({"detail": "Student or phone number not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        filter_q = Q()
+        if student:
+            filter_q |= Q(student=student)
+        if phone:
+            filter_q |= Q(phone_number=phone)
+            if len(phone) >= 10:
+                filter_q |= Q(phone_number__endswith=phone[-10:])
+
+        chat_messages = list(
+            ChatMessage.objects.filter(filter_q)
+            .select_related("student", "student__school_class")
+            .order_by("created_at")
+        )
+
+        # Mirror any historical MessageLogs not in ChatMessage
+        existing_wamids = {m.whatsapp_message_id for m in chat_messages if m.whatsapp_message_id}
+        log_q = Q()
+        if student:
+            log_q |= Q(student=student)
+        if phone:
+            log_q |= Q(recipient_number=phone)
+            if len(phone) >= 10:
+                log_q |= Q(recipient_number__endswith=phone[-10:])
+
+        unmirrored_logs = MessageLog.objects.filter(log_q)
+        if existing_wamids:
+            unmirrored_logs = unmirrored_logs.exclude(whatsapp_message_id__in=existing_wamids)
+
+        for log_entry in unmirrored_logs:
+            tpl = MessageTemplate.objects.filter(name=log_entry.template_name).first()
+            body_preview = tpl.body_preview if tpl else f"Template: {log_entry.template_name}"
+            new_chat_msg = ChatMessage.objects.create(
+                student=log_entry.student or student,
+                phone_number=log_entry.recipient_number,
+                direction="OUTBOUND",
+                message_type="template",
+                template_name=log_entry.template_name,
+                text_content=body_preview,
+                status=log_entry.status,
+                whatsapp_message_id=log_entry.whatsapp_message_id,
+                message_log=log_entry,
+                created_at=log_entry.sent_at or log_entry.created_at,
+            )
+            chat_messages.append(new_chat_msg)
+
+        chat_messages.sort(key=lambda m: m.created_at)
+
+        student_data = None
+        if student:
+            student_data = {
+                "id": student.id,
+                "student_name": student.student_name,
+                "parent_name": student.parent_name,
+                "whatsapp_number": student.whatsapp_number,
+                "fees_due": str(student.fees_due),
+                "class_id": student.school_class_id,
+                "class_name": (
+                    f"{student.school_class.name} - {student.school_class.section}"
+                    if student.school_class and student.school_class.section
+                    else (student.school_class.name if student.school_class else "General")
+                ),
+            }
+
+        first_sender_name = None
+        for m in chat_messages:
+            if m.sender_name:
+                first_sender_name = m.sender_name
+                break
+
+        return Response({
+            "student": student_data,
+            "phone_number": phone or (student.whatsapp_number if student else ""),
+            "recipient_name": student.student_name if student else (first_sender_name or phone),
+            "total_messages": len(chat_messages),
+            "messages": ChatMessageSerializer(chat_messages, many=True).data,
+        })
+
+
+class ConversationSendMessageView(APIView):
+    def post(self, request):
+        serializer = SendConversationMessageSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        vdata = serializer.validated_data
+
+        student_id = vdata.get("student_id")
+        phone_number = vdata.get("phone_number")
+        text_message = vdata.get("message")
+        template_name = vdata.get("template_name")
+        language_code = vdata.get("language_code", "en_US")
+        parameters = vdata.get("parameters")
+
+        student = None
+        if student_id:
+            student = Student.objects.select_related("school_class").filter(id=student_id).first()
+            if student and not phone_number:
+                phone_number = student.whatsapp_number
+
+        if not phone_number and student:
+            phone_number = student.whatsapp_number
+
+        if not phone_number:
+            return Response(
+                {"detail": "Recipient phone number could not be determined."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        clean_phone = sanitize_phone_number(phone_number)
+        if not student:
+            student = Student.objects.filter(whatsapp_number=clean_phone).first()
+            if not student and len(clean_phone) >= 10:
+                student = Student.objects.filter(whatsapp_number__endswith=clean_phone[-10:]).first()
+
+        if template_name:
+            tpl = MessageTemplate.objects.filter(name=template_name).first()
+            result = asyncio.run(
+                whatsapp_service.send_template_message(
+                    recipient_number=clean_phone,
+                    template_name=template_name,
+                    language_code=tpl.language if tpl else language_code,
+                    parameters=parameters,
+                )
+            )
+            wamid = result.get("message_id")
+            succ = result.get("success", False)
+            body_text = tpl.body_preview if tpl else f"Template: {template_name}"
+
+            log_entry = MessageLog.objects.create(
+                student=student,
+                recipient_number=clean_phone,
+                template_name=template_name,
+                status="SENT" if succ else "FAILED",
+                whatsapp_message_id=wamid,
+                error_message=result.get("error") if not succ else None,
+                sent_at=timezone.now() if succ else None,
+                failed_at=timezone.now() if not succ else None,
+            )
+
+            chat_msg = ChatMessage.objects.create(
+                student=student,
+                phone_number=clean_phone,
+                direction="OUTBOUND",
+                message_type="template",
+                template_name=template_name,
+                text_content=body_text,
+                status="SENT" if succ else "FAILED",
+                whatsapp_message_id=wamid,
+                message_log=log_entry,
+                created_at=timezone.now(),
+            )
+            return Response({
+                "success": succ,
+                "message": ChatMessageSerializer(chat_msg).data,
+                "error": result.get("error"),
+            })
+        else:
+            result = asyncio.run(
+                whatsapp_service.send_text_message(
+                    recipient_number=clean_phone,
+                    message_text=text_message,
+                )
+            )
+            wamid = result.get("message_id")
+            succ = result.get("success", False)
+
+            chat_msg = ChatMessage.objects.create(
+                student=student,
+                phone_number=clean_phone,
+                direction="OUTBOUND",
+                message_type="text",
+                text_content=text_message,
+                status="SENT" if succ else "FAILED",
+                whatsapp_message_id=wamid,
+                created_at=timezone.now(),
+            )
+            return Response({
+                "success": succ,
+                "message": ChatMessageSerializer(chat_msg).data,
+                "error": result.get("error"),
+            })
+
 
 
 class EmbeddedSignupConfigView(APIView):

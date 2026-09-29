@@ -140,3 +140,48 @@ class MessageLog(models.Model):
 
     def __str__(self):
         return f"Log #{self.id} -> {self.recipient_number} ({self.status})"
+
+
+class ChatMessage(models.Model):
+    DIRECTION_CHOICES = [
+        ("INBOUND", "Inbound (User -> School)"),
+        ("OUTBOUND", "Outbound (School -> User)"),
+    ]
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chat_messages",
+        db_column="student_id"
+    )
+    phone_number = models.CharField(max_length=20, db_index=True)
+    sender_name = models.CharField(max_length=150, null=True, blank=True)
+    direction = models.CharField(max_length=10, choices=DIRECTION_CHOICES, db_index=True, default="INBOUND")
+    message_type = models.CharField(max_length=30, default="text")
+    text_content = models.TextField(null=True, blank=True)
+    media_url = models.CharField(max_length=500, null=True, blank=True)
+    template_name = models.CharField(max_length=100, null=True, blank=True)
+    status = models.CharField(max_length=50, default="RECEIVED")  # QUEUED, SENT, DELIVERED, READ, RECEIVED, FAILED
+    whatsapp_message_id = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    message_log = models.ForeignKey(
+        MessageLog,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chat_messages",
+        db_column="message_log_id"
+    )
+    raw_payload = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        db_table = "chat_messages"
+        verbose_name = "Chat Message"
+        verbose_name_plural = "Chat Messages"
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"[{self.direction}] {self.phone_number}: {self.text_content or self.template_name or self.message_type}"
+

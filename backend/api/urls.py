@@ -15,6 +15,8 @@ from .views import (
     MessageLogDetailView,
     TestMessageView,
     WhatsAppWebhookView,
+    ConversationDetailView,
+    ConversationSendMessageView,
     EmbeddedSignupConfigView,
     EmbeddedSignupExchangeTokenView,
     MediaUploadView,
@@ -70,6 +72,14 @@ urlpatterns = [
     path("api/message-logs/", MessageLogListView.as_view(), name="log-list-slash"),
     path("api/message-logs/<int:pk>", MessageLogDetailView.as_view(), name="log-detail"),
     path("api/message-logs/<int:pk>/", MessageLogDetailView.as_view(), name="log-detail-slash"),
+
+    # Conversations API
+    path("api/conversations/<str:identifier>", ConversationDetailView.as_view(), name="conversation-detail"),
+    path("api/conversations/<str:identifier>/", ConversationDetailView.as_view(), name="conversation-detail-slash"),
+    path("api/conversations", ConversationDetailView.as_view(), name="conversation-direct"),
+    path("api/conversations/", ConversationDetailView.as_view(), name="conversation-direct-slash"),
+    path("api/conversations/send-message", ConversationSendMessageView.as_view(), name="conversation-send"),
+    path("api/conversations/send-message/", ConversationSendMessageView.as_view(), name="conversation-send-slash"),
 
     # Test Message API
     path("api/messages/test", TestMessageView.as_view(), name="message-test"),

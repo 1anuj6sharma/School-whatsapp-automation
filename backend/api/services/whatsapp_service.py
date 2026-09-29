@@ -460,6 +460,115 @@ class WhatsAppService:
             "meta_error": {"type": "MaxRetriesExceeded"},
         }
 
+    async def send_text_message(
+        self,
+        recipient_number: str,
+        message_text: str,
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
+        phone_id = self.get_phone_number_id()
+        token = self.get_access_token()
+
+        if not phone_id or not token:
+            err_msg = "Meta WhatsApp credentials not configured. Please set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN."
+            logger.error(f"[WhatsAppService] {err_msg}")
+            return {
+                "success": False,
+                "error": err_msg,
+                "meta_error": {"type": "ConfigurationError", "message": err_msg},
+            }
+
+        sanitized_recipient = sanitize_phone_number(recipient_number)
+        masked = mask_phone_number(sanitized_recipient)
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": sanitized_recipient,
+            "type": "text",
+            "text": {
+                "preview_url": False,
+                "body": message_text,
+            },
+        }
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        retry_count = 0
+        backoff_delay = 1.0
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            while retry_count <= max_retries:
+                try:
+                    logger.info(f"[WhatsAppService] Dispatching text message to {masked} (attempt {retry_count + 1})")
+                    response = await client.post(self.base_url, headers=headers, json=payload)
+                    response_json = response.json()
+
+                    if response.status_code in (200, 201):
+                        messages = response_json.get("messages", [])
+                        message_id = messages[0].get("id") if messages else None
+                        wa_id = response_json.get("contacts", [{}])[0].get("wa_id", sanitized_recipient)
+                        logger.info(f"[WhatsAppService] Text message sent successfully to {masked}. Meta ID: {message_id}")
+                        return {
+                            "success": True,
+                            "message_id": message_id,
+                            "recipient": wa_id,
+                            "response_data": response_json,
+                        }
+
+                    if response.status_code in (429, 500, 502, 503, 504) and retry_count < max_retries:
+                        retry_count += 1
+                        logger.warning(
+                            f"[WhatsAppService] HTTP {response.status_code} for {masked}. Retrying in {backoff_delay}s..."
+                        )
+                        await asyncio.sleep(backoff_delay)
+                        backoff_delay *= 2
+                        continue
+
+                    meta_error = response_json.get("error", {})
+                    error_message = (
+                        meta_error.get("message")
+                        or meta_error.get("error_user_msg")
+                        or f"Meta API error (HTTP {response.status_code})"
+                    )
+                    logger.error(f"[WhatsAppService] Meta API rejected text message for {masked}: {error_message}")
+                    return {
+                        "success": False,
+                        "error": error_message,
+                        "meta_error": meta_error,
+                        "status_code": response.status_code,
+                    }
+
+                except httpx.RequestError as ex:
+                    retry_count += 1
+                    logger.warning(f"[WhatsAppService] Network error sending text to {masked}: {str(ex)}")
+                    if retry_count <= max_retries:
+                        await asyncio.sleep(backoff_delay)
+                        backoff_delay *= 2
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"Network communication failure: {str(ex)}",
+                            "meta_error": {"type": "NetworkError", "detail": str(ex)},
+                        }
+                except Exception as ex:
+                    logger.error(f"[WhatsAppService] Exception sending text to {masked}: {str(ex)}")
+                    return {
+                        "success": False,
+                        "error": f"Internal communication error: {str(ex)}",
+                        "meta_error": {"type": type(ex).__name__},
+                    }
+
+        return {
+            "success": False,
+            "error": "Failed after maximum retries.",
+            "meta_error": {"type": "MaxRetriesExceeded"},
+        }
+
+
     async def fetch_templates_from_meta(self) -> List[Dict[str, Any]]:
         waba_id = self.get_waba_id()
         token = self.get_access_token()

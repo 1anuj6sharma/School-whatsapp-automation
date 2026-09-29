@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog
+from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog, ChatMessage
 from .utils.phone import sanitize_phone_number, validate_phone_number
 
 class ClassSerializer(serializers.ModelSerializer):
@@ -232,3 +232,51 @@ class TestMessageSerializer(serializers.Serializer):
                 f"Invalid phone number: {value}. Must contain 10-15 digits including country code."
             )
         return cleaned
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="student.student_name", read_only=True, default=None)
+    class_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChatMessage
+        fields = [
+            "id",
+            "student_id",
+            "student_name",
+            "class_name",
+            "phone_number",
+            "sender_name",
+            "direction",
+            "message_type",
+            "text_content",
+            "media_url",
+            "template_name",
+            "status",
+            "whatsapp_message_id",
+            "message_log_id",
+            "created_at",
+        ]
+
+    def get_class_name(self, obj):
+        if obj.student and obj.student.school_class:
+            cls = obj.student.school_class
+            return f"{cls.name} - {cls.section}" if cls.section else cls.name
+        return None
+
+
+class SendConversationMessageSerializer(serializers.Serializer):
+    student_id = serializers.IntegerField(required=False, allow_null=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    message = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    template_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    language_code = serializers.CharField(required=False, default="en_US")
+    parameters = serializers.ListField(child=serializers.CharField(), required=False, allow_null=True)
+
+    def validate(self, data):
+        if not data.get("student_id") and not data.get("phone_number"):
+            raise serializers.ValidationError("Either student_id or phone_number is required.")
+        if not data.get("message") and not data.get("template_name"):
+            raise serializers.ValidationError("Either message (text) or template_name is required.")
+        return data
+

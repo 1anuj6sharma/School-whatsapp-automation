@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { ScrollText, RefreshCw } from 'lucide-react';
+import { ScrollText, RefreshCw, MessageSquare } from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { EmptyState } from '../components/EmptyState';
+import { ConversationDrawer } from '../components/ConversationDrawer';
 
 export const MessageLogsPage = () => {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [activeConversation, setActiveConversation] = useState(null);
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -29,6 +31,14 @@ export const MessageLogsPage = () => {
     fetchLogs();
   }, [statusFilter]);
 
+  const handleOpenConversation = (log) => {
+    setActiveConversation({
+      studentId: log.student_id,
+      phoneNumber: log.recipient_number,
+      studentName: log.student_name,
+    });
+  };
+
   return (
     <div className="space-y-6 animate-fade-in pb-12">
       {/* Header */}
@@ -39,7 +49,7 @@ export const MessageLogsPage = () => {
             <span>Message Delivery Logs</span>
           </h2>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Complete audit trail of individual WhatsApp dispatches and delivery confirmations.
+            Complete audit trail of WhatsApp dispatches, incoming parent replies, and delivery confirmations.
           </p>
         </div>
 
@@ -81,7 +91,7 @@ export const MessageLogsPage = () => {
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-700 min-w-[750px]">
+            <table className="w-full text-left text-sm text-slate-700 min-w-[850px]">
               <thead className="bg-slate-50/80 text-xs uppercase font-semibold text-slate-500 border-b border-slate-200">
                 <tr>
                   <th className="px-6 py-4">Log ID</th>
@@ -92,6 +102,7 @@ export const MessageLogsPage = () => {
                   <th className="px-6 py-4">Meta Message ID</th>
                   <th className="px-6 py-4">Dispatched At</th>
                   <th className="px-6 py-4">Error Detail</th>
+                  <th className="px-6 py-4 text-center">Conversation</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -99,7 +110,13 @@ export const MessageLogsPage = () => {
                   <tr key={log.id} className="hover:bg-slate-50/80 transition-colors font-sans">
                     <td className="px-6 py-4 font-mono text-xs text-slate-600">#{log.id}</td>
                     <td className="px-6 py-4 font-bold text-slate-900">
-                      {log.student_name || `Student #${log.student_id || '-'}`}
+                      <button
+                        onClick={() => handleOpenConversation(log)}
+                        className="hover:text-emerald-600 hover:underline text-left transition-colors font-bold"
+                        title="Click to view conversation"
+                      >
+                        {log.student_name || `Student #${log.student_id || '-'}`}
+                      </button>
                     </td>
                     <td className="px-6 py-4 font-mono text-xs text-slate-700">
                       {log.masked_number || log.recipient_number}
@@ -138,6 +155,16 @@ export const MessageLogsPage = () => {
                         <span className="text-slate-400">-</span>
                       )}
                     </td>
+                    <td className="px-6 py-4 text-center">
+                      <button
+                        onClick={() => handleOpenConversation(log)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white rounded-xl text-xs font-semibold border border-emerald-200 hover:border-emerald-600 transition-all shadow-2xs group"
+                        title="View conversation history with this user"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5 text-emerald-600 group-hover:text-white transition-colors" />
+                        <span>See Conversation</span>
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -145,6 +172,16 @@ export const MessageLogsPage = () => {
           </div>
         </div>
       )}
+
+      {/* Side Conversation Drawer */}
+      <ConversationDrawer
+        isOpen={!!activeConversation}
+        onClose={() => setActiveConversation(null)}
+        studentId={activeConversation?.studentId}
+        phoneNumber={activeConversation?.phoneNumber}
+        studentName={activeConversation?.studentName}
+      />
     </div>
   );
 };
+

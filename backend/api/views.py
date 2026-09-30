@@ -380,7 +380,11 @@ class StudentImportCSVView(APIView):
 
 class TemplateListCreateView(APIView):
     def get(self, request):
-        templates = list(MessageTemplate.objects.all().order_by("name"))
+        include_archived = request.query_params.get("include_archived", "false").lower() in ("true", "1")
+        qs = MessageTemplate.objects.all().order_by("name")
+        if not include_archived:
+            qs = qs.exclude(status__in=["PENDING_DELETION", "ARCHIVED", "DELETED"]).exclude(name__iexact="hello_world")
+        templates = list(qs)
 
         if not templates or len(templates) <= 2:
             try:
@@ -399,7 +403,10 @@ class TemplateListCreateView(APIView):
                             "header_text": item.get("header_text"),
                         }
                     )
-                templates = list(MessageTemplate.objects.all().order_by("name"))
+                qs = MessageTemplate.objects.all().order_by("name")
+                if not include_archived:
+                    qs = qs.exclude(status__in=["PENDING_DELETION", "ARCHIVED", "DELETED"]).exclude(name__iexact="hello_world")
+                templates = list(qs)
             except Exception as ex:
                 logger.warning(f"[Templates] Auto-sync from Meta skipped: {ex}")
 
@@ -480,7 +487,9 @@ class TemplateSyncView(APIView):
                 }
             )
 
-        all_templates = MessageTemplate.objects.all().order_by("name")
+        all_templates = MessageTemplate.objects.exclude(
+            status__in=["PENDING_DELETION", "ARCHIVED", "DELETED"]
+        ).exclude(name__iexact="hello_world").order_by("name")
         return Response(TemplateSerializer(all_templates, many=True).data)
 
 

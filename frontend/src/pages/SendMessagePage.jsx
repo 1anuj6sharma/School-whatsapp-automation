@@ -142,8 +142,13 @@ export const SendMessagePage = ({
           api.getClasses(),
           api.getTemplates(),
         ]);
+        const validTemplates = (templatesData || []).filter(
+          (t) =>
+            !['PENDING_DELETION', 'ARCHIVED', 'DELETED'].includes((t.status || '').toUpperCase()) &&
+            (t.name || '').toLowerCase() !== 'hello_world'
+        );
         setClasses(classesData);
-        setTemplates(templatesData);
+        setTemplates(validTemplates);
 
         const startWf = initialWorkflow || 'FEES';
         setActiveWorkflow(startWf);
@@ -522,13 +527,15 @@ export const SendMessagePage = ({
     return resolved;
   };
 
-  // Workflow-eligible students (For FEES: only students with pending fees > 0. For others: all class students)
+  // Workflow-eligible students (For FEES: students with pending fees > 0 OR explicitly selected from student section. For others: all class students)
   const workflowStudents = useMemo(() => {
     if (activeWorkflow === 'FEES') {
-      return students.filter((s) => Number(s.fees_due || 0) > 0);
+      return students.filter(
+        (s) => Number(s.fees_due || 0) > 0 || (initialStudentIds && initialStudentIds.includes(s.id))
+      );
     }
     return students;
-  }, [students, activeWorkflow]);
+  }, [students, activeWorkflow, initialStudentIds]);
 
   // Selected student for preview
   const previewStudent =

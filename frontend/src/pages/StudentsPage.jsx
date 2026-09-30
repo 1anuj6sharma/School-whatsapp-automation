@@ -17,6 +17,8 @@ import {
   Megaphone,
   Send,
   Zap,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Modal } from '../components/Modal';
@@ -28,21 +30,29 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Checkbox Selection state for Students
+  const [selectedStudentIds, setSelectedStudentIds] = useState([]);
+
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedClassId, setSelectedClassId] = useState('');
+  const [selectedClassIds, setSelectedClassIds] = useState([]);
   const [optInFilter, setOptInFilter] = useState('ALL');
   const [feeFilter, setFeeFilter] = useState('ALL');
 
-  // Action Dropdown Menu
+  // Action Dropdown Menu & Class Dropdown
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuRef = useRef(null);
+  const [classDropdownOpen, setClassDropdownOpen] = useState(false);
+  const classDropdownRef = useRef(null);
 
-  // Close Action dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (actionMenuRef.current && !actionMenuRef.current.contains(event.target)) {
         setActionMenuOpen(false);
+      }
+      if (classDropdownRef.current && !classDropdownRef.current.contains(event.target)) {
+        setClassDropdownOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -80,7 +90,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
       const [classesData, studentsData] = await Promise.all([
         api.getClasses(),
         api.getStudents({
-          class_id: selectedClassId ? Number(selectedClassId) : undefined,
+          class_ids: selectedClassIds.length > 0 ? selectedClassIds : undefined,
           search: searchTerm ? searchTerm : undefined,
           opt_in: optInFilter === 'ALL' ? undefined : optInFilter === 'OPTED_IN',
           fees_filter: feeFilter === 'ALL' ? undefined : feeFilter,
@@ -88,6 +98,8 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
       ]);
       setClasses(classesData);
       setStudents(studentsData);
+      // Auto-select all students when list is fetched or filtered
+      setSelectedStudentIds(studentsData.map((s) => s.id));
     } catch (err) {
       showToast({
         type: 'error',
@@ -99,9 +111,59 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
     }
   };
 
+  const handleToggleSelectStudent = (studentId) => {
+    setSelectedStudentIds((prev) => {
+      if (prev.includes(studentId)) {
+        return prev.filter((id) => id !== studentId);
+      } else {
+        return [...prev, studentId];
+      }
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    if (selectedStudentIds.length === students.length && students.length > 0) {
+      setSelectedStudentIds([]);
+    } else {
+      setSelectedStudentIds(students.map((s) => s.id));
+    }
+  };
+
+  const handleWorkflowClick = (workflow) => {
+    setActionMenuOpen(false);
+    if (!onNavigateToSendMessage) return;
+
+    // Use only currently selected / checked students
+    let targetIds = selectedStudentIds;
+    if (targetIds.length === 0) {
+      if (showToast) {
+        showToast({
+          type: 'warning',
+          title: 'No Students Selected',
+          message: 'Please check at least one student checkbox before starting broadcast.',
+        });
+      }
+      return;
+    }
+
+    const selectedStudentObjects = students.filter((s) => targetIds.includes(s.id));
+    const cSet = new Set();
+    selectedStudentObjects.forEach((s) => {
+      const cid = s.class_id || (s.school_class && s.school_class.id);
+      if (cid) cSet.add(Number(cid));
+    });
+    const targetClassIds = Array.from(cSet);
+
+    onNavigateToSendMessage({
+      workflow,
+      studentIds: targetIds,
+      classIds: targetClassIds.length > 0 ? targetClassIds : (selectedClassIds.length > 0 ? selectedClassIds : (classes.length > 0 ? [classes[0].id] : [])),
+    });
+  };
+
   useEffect(() => {
     fetchData();
-  }, [selectedClassId, optInFilter, feeFilter]);
+  }, [selectedClassIds.join(','), optInFilter, feeFilter]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -370,18 +432,116 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
         </form>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-2.5 w-full md:w-auto">
-          <select
-            value={selectedClassId}
-            onChange={(e) => setSelectedClassId(e.target.value)}
-            className="w-full sm:w-auto bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs font-medium cursor-pointer"
-          >
-            <option value="">All Classes</option>
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} {c.section ? `(${c.section})` : ''}
-              </option>
-            ))}
-          </select>
+          {/* Multi-Select Class Filter Dropdown */}
+          <div className="relative shrink-0 w-full sm:w-auto" ref={classDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setClassDropdownOpen((prev) => !prev)}
+              className="w-full sm:w-auto flex items-center justify-between sm:justify-start gap-2 bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs font-medium cursor-pointer"
+            >
+              <div className="flex items-center gap-1.5 truncate">
+                <Users className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span className="truncate">
+                  {selectedClassIds.length === 0
+                    ? 'All Classes'
+                    : selectedClassIds.length === 1
+                    ? (classes.find((c) => c.id === selectedClassIds[0])?.name || '1 Class') +
+                      (classes.find((c) => c.id === selectedClassIds[0])?.section
+                        ? ` (${classes.find((c) => c.id === selectedClassIds[0])?.section})`
+                        : '')
+                    : `${selectedClassIds.length} Classes Selected`}
+                </span>
+              </div>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${
+                  classDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {classDropdownOpen && (
+              <div className="absolute left-0 mt-2 w-56 sm:w-64 bg-white rounded-2xl border border-slate-200 shadow-xl z-50 p-2 animate-in fade-in zoom-in-95 duration-150">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 px-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Filter by Class
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedClassIds.length === classes.length) {
+                        setSelectedClassIds([]);
+                      } else {
+                        setSelectedClassIds(classes.map((c) => c.id));
+                      }
+                    }}
+                    className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                  >
+                    {selectedClassIds.length === classes.length ? 'Clear All' : 'Select All'}
+                  </button>
+                </div>
+
+                <div className="max-h-48 overflow-y-auto space-y-1 custom-scrollbar">
+                  {/* Option for All Classes */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedClassIds([]);
+                      setClassDropdownOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors text-left cursor-pointer ${
+                      selectedClassIds.length === 0
+                        ? 'bg-emerald-50 text-emerald-900 font-bold'
+                        : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    {selectedClassIds.length === 0 ? (
+                      <CheckSquare className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <Square className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                    )}
+                    <span>All Classes</span>
+                  </button>
+
+                  {/* Individual Class Checkboxes */}
+                  {classes.map((c) => {
+                    const isChecked = selectedClassIds.includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedClassIds((prev) =>
+                            prev.includes(c.id) ? prev.filter((id) => id !== c.id) : [...prev, c.id]
+                          );
+                        }}
+                        className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors text-left cursor-pointer ${
+                          isChecked
+                            ? 'bg-emerald-50 text-emerald-900 font-bold'
+                            : 'hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          {isChecked ? (
+                            <CheckSquare className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          ) : (
+                            <Square className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                          )}
+                          <span className="truncate">
+                            {c.name} {c.section ? `(${c.section})` : ''}
+                          </span>
+                        </div>
+                        {c.student_count !== undefined && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-normal">
+                            {c.student_count}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
 
           <select
             value={feeFilter}
@@ -427,28 +587,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                   {/* Option 1: Fees Reminder */}
                   <button
                     type="button"
-                    onClick={() => {
-                      setActionMenuOpen(false);
-                      if (onNavigateToSendMessage) {
-                        const filteredStudentIds = students.map((s) => s.id);
-                        let filteredClassIds = [];
-                        if (selectedClassId) {
-                          filteredClassIds = [Number(selectedClassId)];
-                        } else {
-                          const cSet = new Set();
-                          students.forEach((s) => {
-                            const cid = s.class_id || (s.school_class && s.school_class.id);
-                            if (cid) cSet.add(Number(cid));
-                          });
-                          filteredClassIds = Array.from(cSet);
-                        }
-                        onNavigateToSendMessage({
-                          workflow: 'FEES',
-                          studentIds: filteredStudentIds,
-                          classIds: filteredClassIds.length > 0 ? filteredClassIds : (classes.length > 0 ? [classes[0].id] : []),
-                        });
-                      }
-                    }}
+                    onClick={() => handleWorkflowClick('FEES')}
                     className="w-full flex items-start gap-2.5 p-2 rounded-xl text-left hover:bg-amber-50/80 transition-colors group cursor-pointer"
                   >
                     <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-amber-200 transition-colors">
@@ -459,7 +598,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                         Fees Reminder
                       </p>
                       <p className="text-[10px] text-slate-500 leading-tight">
-                        Broadcast dues &amp; reminders to parents
+                        Broadcast dues &amp; reminders to {selectedStudentIds.length} selected parents
                       </p>
                     </div>
                   </button>
@@ -467,28 +606,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                   {/* Option 2: Announcement */}
                   <button
                     type="button"
-                    onClick={() => {
-                      setActionMenuOpen(false);
-                      if (onNavigateToSendMessage) {
-                        const filteredStudentIds = students.map((s) => s.id);
-                        let filteredClassIds = [];
-                        if (selectedClassId) {
-                          filteredClassIds = [Number(selectedClassId)];
-                        } else {
-                          const cSet = new Set();
-                          students.forEach((s) => {
-                            const cid = s.class_id || (s.school_class && s.school_class.id);
-                            if (cid) cSet.add(Number(cid));
-                          });
-                          filteredClassIds = Array.from(cSet);
-                        }
-                        onNavigateToSendMessage({
-                          workflow: 'ANNOUNCEMENT',
-                          studentIds: filteredStudentIds,
-                          classIds: filteredClassIds.length > 0 ? filteredClassIds : (classes.length > 0 ? [classes[0].id] : []),
-                        });
-                      }
-                    }}
+                    onClick={() => handleWorkflowClick('ANNOUNCEMENT')}
                     className="w-full flex items-start gap-2.5 p-2 rounded-xl text-left hover:bg-purple-50/80 transition-colors group cursor-pointer"
                   >
                     <div className="w-7 h-7 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-purple-200 transition-colors">
@@ -499,7 +617,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                         Announcement
                       </p>
                       <p className="text-[10px] text-slate-500 leading-tight">
-                        Broadcast notices, circulars &amp; events
+                        Broadcast notices &amp; events to {selectedStudentIds.length} selected students
                       </p>
                     </div>
                   </button>
@@ -507,28 +625,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                   {/* Option 3: Normal Workflow */}
                   <button
                     type="button"
-                    onClick={() => {
-                      setActionMenuOpen(false);
-                      if (onNavigateToSendMessage) {
-                        const filteredStudentIds = students.map((s) => s.id);
-                        let filteredClassIds = [];
-                        if (selectedClassId) {
-                          filteredClassIds = [Number(selectedClassId)];
-                        } else {
-                          const cSet = new Set();
-                          students.forEach((s) => {
-                            const cid = s.class_id || (s.school_class && s.school_class.id);
-                            if (cid) cSet.add(Number(cid));
-                          });
-                          filteredClassIds = Array.from(cSet);
-                        }
-                        onNavigateToSendMessage({
-                          workflow: 'NORMAL',
-                          studentIds: filteredStudentIds,
-                          classIds: filteredClassIds.length > 0 ? filteredClassIds : (classes.length > 0 ? [classes[0].id] : []),
-                        });
-                      }
-                    }}
+                    onClick={() => handleWorkflowClick('NORMAL')}
                     className="w-full flex items-start gap-2.5 p-2 rounded-xl text-left hover:bg-emerald-50/80 transition-colors group cursor-pointer"
                   >
                     <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-emerald-200 transition-colors">
@@ -539,7 +636,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                         Normal Workflow
                       </p>
                       <p className="text-[10px] text-slate-500 leading-tight">
-                        Standard catalog templates broadcast
+                        Standard catalog broadcast to {selectedStudentIds.length} selected students
                       </p>
                     </div>
                   </button>
@@ -563,10 +660,70 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
         />
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+          {/* Top Selection Status Toolbar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-6 py-2.5 bg-slate-50/90 border-b border-slate-200 text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-slate-800">
+                {selectedStudentIds.length} of {students.length} students selected
+              </span>
+              {selectedStudentIds.length < students.length && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedStudentIds(students.map((s) => s.id))}
+                  className="text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
+                >
+                  Select all ({students.length})
+                </button>
+              )}
+              {selectedStudentIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedStudentIds([])}
+                  className="text-rose-600 hover:text-rose-700 font-medium underline cursor-pointer"
+                >
+                  Clear Selection
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleToggleSelectAll}
+                className="px-3 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold shadow-xs transition-colors cursor-pointer text-xs"
+              >
+                {selectedStudentIds.length === students.length && students.length > 0
+                  ? 'Deselect All'
+                  : 'Select All Students'}
+              </button>
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-700 min-w-[650px]">
+            <table className="w-full text-left text-sm text-slate-700 min-w-[700px]">
               <thead className="bg-slate-50/80 text-xs uppercase font-semibold text-slate-500 border-b border-slate-200">
                 <tr>
+                  <th className="px-4 py-4 w-12 text-center">
+                    <button
+                      type="button"
+                      onClick={handleToggleSelectAll}
+                      className="p-1 rounded-md text-slate-500 hover:text-slate-900 transition-colors cursor-pointer inline-flex items-center justify-center"
+                      title={
+                        selectedStudentIds.length === students.length && students.length > 0
+                          ? 'Deselect All'
+                          : 'Select All'
+                      }
+                    >
+                      {selectedStudentIds.length === students.length && students.length > 0 ? (
+                        <CheckSquare className="w-4 h-4 text-emerald-600" />
+                      ) : selectedStudentIds.length > 0 ? (
+                        <div className="w-4 h-4 rounded border-2 border-emerald-600 bg-emerald-100 flex items-center justify-center">
+                          <div className="w-2 h-0.5 bg-emerald-700 rounded-full" />
+                        </div>
+                      ) : (
+                        <Square className="w-4 h-4 text-slate-400 hover:text-slate-600" />
+                      )}
+                    </button>
+                  </th>
                   <th className="px-6 py-4">Student Name</th>
                   <th className="px-6 py-4">Parent Name</th>
                   <th className="px-6 py-4">Class</th>
@@ -577,37 +734,61 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {students.map((student) => (
-                  <tr key={student.id} className="hover:bg-slate-50/80 transition-colors font-sans">
-                    <td className="px-6 py-4 font-bold text-slate-900">{student.student_name}</td>
-                    <td className="px-6 py-4 text-slate-600">{student.parent_name || '-'}</td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-col gap-0.5">
-                        <span className="px-2.5 py-1 rounded-md bg-slate-100 text-sky-800 text-xs font-semibold border border-slate-200 inline-block w-fit">
-                          {student.class_name
-                            ? student.class_name.split(' - ')[0]
-                            : `Class #${student.class_id}`}
-                        </span>
-                        {student.class_section && (
-                          <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-600 text-[10px] font-bold border border-sky-100 inline-block w-fit">
-                            Section {student.class_section}
+                {students.map((student) => {
+                  const isSelected = selectedStudentIds.includes(student.id);
+                  return (
+                    <tr
+                      key={student.id}
+                      className={`hover:bg-slate-50/80 transition-colors font-sans ${
+                        isSelected ? 'bg-emerald-50/30' : ''
+                      }`}
+                    >
+                      <td className="px-4 py-4 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSelectStudent(student.id)}
+                          className="p-1 rounded-md transition-colors cursor-pointer inline-flex items-center justify-center"
+                          title={isSelected ? 'Deselect student' : 'Select student'}
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-emerald-600" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                          )}
+                        </button>
+                      </td>
+                      <td className="px-6 py-4 font-bold text-slate-900">{student.student_name}</td>
+                      <td className="px-6 py-4 text-slate-600">{student.parent_name || '-'}</td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="px-2.5 py-1 rounded-md bg-slate-100 text-sky-800 text-xs font-semibold border border-slate-200 inline-block w-fit">
+                            {student.class_name
+                              ? student.class_name.split(' - ')[0]
+                              : `Class #${student.class_id}`}
                           </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 font-mono text-xs text-slate-700">
-                      +{student.whatsapp_number}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 rounded-md text-xs font-bold font-mono ${Number(student.fees_due || 0) > 0
-                          ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        }`}>
-                        {Number(student.fees_due || 0) > 0
-                          ? `₹${Number(student.fees_due).toLocaleString('en-IN')} Due`
-                          : '₹0 Paid'}
-                      </span>
-                    </td>
+                          {student.class_section && (
+                            <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-600 text-[10px] font-bold border border-sky-100 inline-block w-fit">
+                              Section {student.class_section}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 font-mono text-xs text-slate-700">
+                        +{student.whatsapp_number}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`px-2.5 py-1 rounded-md text-xs font-bold font-mono ${
+                            Number(student.fees_due || 0) > 0
+                              ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                              : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          }`}
+                        >
+                          {Number(student.fees_due || 0) > 0
+                            ? `₹${Number(student.fees_due).toLocaleString('en-IN')} Due`
+                            : '₹0 Paid'}
+                        </span>
+                      </td>
                     <td className="px-6 py-4">
                       <button
                         onClick={() => handleToggleOptIn(student)}
@@ -661,7 +842,8 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                );
+              })}
               </tbody>
             </table>
           </div>

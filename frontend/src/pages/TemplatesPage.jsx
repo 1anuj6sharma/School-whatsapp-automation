@@ -271,18 +271,30 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
     }
   };
 
-  // Filter templates
-  const filteredTemplates = templates.filter((tpl) => {
-    if (filterStatus === 'ALL') return true;
-    if (filterStatus === 'ACTIVE') return tpl.status === 'ACTIVE' || tpl.status === 'APPROVED';
-    if (filterStatus === 'PENDING') return tpl.status === 'PENDING' || tpl.status === 'IN_REVIEW';
-    if (filterStatus === 'REJECTED') return tpl.status === 'REJECTED';
+  // Filter templates: Exclude ARCHIVED, PENDING_DELETION, DELETED and Meta sample hello_world
+  const EXCLUDED_STATUSES = ['PENDING_DELETION', 'ARCHIVED', 'DELETED'];
+  const visibleTemplates = templates.filter(
+    (t) =>
+      !EXCLUDED_STATUSES.includes((t.status || '').toUpperCase()) &&
+      (t.name || '').toLowerCase() !== 'hello_world'
+  );
+
+  const filteredTemplates = visibleTemplates.filter((tpl) => {
+    const st = (tpl.status || '').toUpperCase();
+    if (filterStatus === 'ALL') {
+      // In "All", show ONLY Approved/Active and Pending review templates
+      return st === 'ACTIVE' || st === 'APPROVED' || st === 'PENDING' || st === 'IN_REVIEW' || st === 'IN_APPEAL';
+    }
+    if (filterStatus === 'ACTIVE') return st === 'ACTIVE' || st === 'APPROVED';
+    if (filterStatus === 'PENDING') return st === 'PENDING' || st === 'IN_REVIEW' || st === 'IN_APPEAL';
+    if (filterStatus === 'REJECTED') return st === 'REJECTED';
     return true;
   });
 
-  const activeCount = templates.filter((t) => t.status === 'ACTIVE' || t.status === 'APPROVED').length;
-  const pendingCount = templates.filter((t) => t.status === 'PENDING' || t.status === 'IN_REVIEW').length;
-  const rejectedCount = templates.filter((t) => t.status === 'REJECTED').length;
+  const activeCount = visibleTemplates.filter((t) => t.status === 'ACTIVE' || t.status === 'APPROVED').length;
+  const pendingCount = visibleTemplates.filter((t) => t.status === 'PENDING' || t.status === 'IN_REVIEW' || t.status === 'IN_APPEAL').length;
+  const rejectedCount = visibleTemplates.filter((t) => t.status === 'REJECTED').length;
+  const allTabCount = activeCount + pendingCount;
 
   if (loading) {
     return <LoadingSpinner message="Fetching templates directly from Meta WhatsApp Manager..." />;
@@ -370,7 +382,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
               }`}
           >
-            All ({templates.length})
+            All ({allTabCount})
           </button>
           <button
             type="button"

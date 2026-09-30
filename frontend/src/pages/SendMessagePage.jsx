@@ -47,20 +47,25 @@ const filterTemplatesForWorkflow = (workflow, allTemplates) => {
     );
   };
 
+  const validTemplates = allTemplates.filter((t) => {
+    const st = (t.status || '').toUpperCase();
+    return (
+      !['PENDING_DELETION', 'ARCHIVED', 'DELETED'].includes(st) &&
+      !isTestOrSystemTemplate(t)
+    );
+  });
+
   if (workflow === 'FEES') {
     const feeKeywords = [
       'fee', 'fees', 'due', 'dues', 'payment', 'tuition',
       'receipt', 'invoice', 'installment', 'arrear', 'pending_fee', 'balance'
     ];
 
-    const feeTemplates = allTemplates.filter((t) => {
-      if (isTestOrSystemTemplate(t)) return false;
+    return validTemplates.filter((t) => {
       const n = (t.name || '').toLowerCase();
       const b = (t.body_preview || '').toLowerCase();
       return feeKeywords.some((k) => n.includes(k) || b.includes(k));
     });
-
-    return feeTemplates.length > 0 ? feeTemplates : allTemplates;
   }
 
   if (workflow === 'ANNOUNCEMENT') {
@@ -77,21 +82,21 @@ const filterTemplatesForWorkflow = (workflow, allTemplates) => {
     const annKeywords = [
       'announc', 'notice', 'circular', 'invite', 'function',
       'event', 'holiday', 'celebrat', 'annual', 'ptm',
-      'sports', 'vacation', 'ceremony', 'school_info', 'admission'
+      'sports', 'vacation', 'ceremony', 'school_info', 'admission',
+      'meet', 'exam', 'test_schedul', 'session', 'activity', 'greeting',
+      'alert', 'info', 'news', 'update', 'schedule'
     ];
 
-    const annTemplates = allTemplates.filter((t) => {
-      if (isTestOrSystemTemplate(t) || isFeeTemplate(t) || isAttendanceTemplate(t)) return false;
+    return validTemplates.filter((t) => {
+      if (isFeeTemplate(t) || isAttendanceTemplate(t)) return false;
       const n = (t.name || '').toLowerCase();
       const b = (t.body_preview || '').toLowerCase();
       return annKeywords.some((k) => n.includes(k) || b.includes(k));
     });
-
-    return annTemplates.length > 0 ? annTemplates : allTemplates;
   }
 
-  // NORMAL Workflow: includes every single template in the system
-  return allTemplates;
+  // NORMAL Workflow: includes all valid templates
+  return validTemplates;
 };
 
 export const SendMessagePage = ({
@@ -342,7 +347,7 @@ export const SendMessagePage = ({
     fetchStudents();
   }, [selectedClassIds.join(',')]);
 
-  const selectedTemplate = templates.find((t) => t.id === Number(selectedTemplateId));
+  const selectedTemplate = availableTemplates.find((t) => t.id === Number(selectedTemplateId)) || null;
   const isTemplateActive = selectedTemplate?.status === 'ACTIVE' || selectedTemplate?.status === 'APPROVED';
 
   // Strict check if template uses an Image header
@@ -1246,44 +1251,56 @@ export const SendMessagePage = ({
               </div>
 
               {/* Chat Message Bubble */}
-              <div className="bg-white p-3.5 rounded-2xl rounded-tl-xs shadow-md border border-slate-200 text-xs text-slate-800 space-y-2.5 max-w-[92%] relative">
-                {/* Image Header Preview if applicable */}
-                {isImageTemplate && (
-                  <div className="w-full h-36 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 relative flex items-center justify-center">
-                    {localPreviewUrl || headerImageUrl ? (
-                      <img
-                        src={localPreviewUrl || headerImageUrl}
-                        alt="Header attachment"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center justify-center text-slate-400 text-xs gap-1 p-2 text-center">
-                        <ImageIcon className="w-6 h-6 text-purple-400" />
-                        <span className="font-semibold text-purple-700">Image Header Required</span>
-                        <span className="text-[10px] text-slate-400">Upload an image from form</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Text Header Preview if applicable */}
-                {selectedTemplate?.header_type === 'TEXT' && selectedTemplate.header_text && (
-                  <div className="font-bold text-sm text-slate-900 border-b border-slate-100 pb-1">
-                    {selectedTemplate.header_text}
-                  </div>
-                )}
-
-                {/* Body Text Preview with Dynamic Values */}
-                <div className="whitespace-pre-line text-slate-700 leading-relaxed font-normal text-xs">
-                  {renderedPreviewText}
+              {!selectedTemplate ? (
+                <div className="bg-white/90 p-8 rounded-2xl shadow-sm border border-slate-200 text-center space-y-2 text-slate-500">
+                  <FileCode className="w-8 h-8 text-slate-300 mx-auto" />
+                  <p className="text-xs font-semibold text-slate-700">No Template Selected</p>
+                  <p className="text-[11px] text-slate-400">
+                    {availableTemplates.length === 0
+                      ? 'No announcement templates available to preview'
+                      : 'Select a template from the list above to preview the message'}
+                  </p>
                 </div>
+              ) : (
+                <div className="bg-white p-3.5 rounded-2xl rounded-tl-xs shadow-md border border-slate-200 text-xs text-slate-800 space-y-2.5 max-w-[92%] relative">
+                  {/* Image Header Preview if applicable */}
+                  {isImageTemplate && (
+                    <div className="w-full h-36 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 relative flex items-center justify-center">
+                      {localPreviewUrl || headerImageUrl ? (
+                        <img
+                          src={localPreviewUrl || headerImageUrl}
+                          alt="Header attachment"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-slate-400 text-xs gap-1 p-2 text-center">
+                          <ImageIcon className="w-6 h-6 text-purple-400" />
+                          <span className="font-semibold text-purple-700">Image Header Required</span>
+                          <span className="text-[10px] text-slate-400">Upload an image from form</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                {/* WhatsApp Message Metadata */}
-                <div className="flex items-center justify-end gap-1 text-[10px] text-slate-400 pt-1">
-                  <span>Just now</span>
-                  <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                  {/* Text Header Preview if applicable */}
+                  {selectedTemplate?.header_type === 'TEXT' && selectedTemplate.header_text && (
+                    <div className="font-bold text-sm text-slate-900 border-b border-slate-100 pb-1">
+                      {selectedTemplate.header_text}
+                    </div>
+                  )}
+
+                  {/* Body Text Preview with Dynamic Values */}
+                  <div className="whitespace-pre-line text-slate-700 leading-relaxed font-normal text-xs">
+                    {renderedPreviewText}
+                  </div>
+
+                  {/* WhatsApp Message Metadata */}
+                  <div className="flex items-center justify-end gap-1 text-[10px] text-slate-400 pt-1">
+                    <span>Just now</span>
+                    <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Estimated Messaging Cost Card */}

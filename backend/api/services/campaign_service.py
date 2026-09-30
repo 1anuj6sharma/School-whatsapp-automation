@@ -134,7 +134,9 @@ class CampaignService:
         @sync_to_async
         def get_queued_logs():
             return list(
-                MessageLog.objects.filter(campaign_id=campaign_id, status="QUEUED").select_related("student")
+                MessageLog.objects.filter(campaign_id=campaign_id, status="QUEUED").select_related(
+                    "student", "student__school_class"
+                )
             )
 
         queued_logs = await get_queued_logs()
@@ -147,97 +149,114 @@ class CampaignService:
 
         async def send_single_log(log_item: MessageLog):
             async with semaphore:
-                student_id = log_item.student_id
-                masked_num = mask_phone_number(log_item.recipient_number)
+                try:
+                    student_id = log_item.student_id
+                    masked_num = mask_phone_number(log_item.recipient_number)
 
-                params = None
-                if per_student_parameters and (
-                    str(student_id) in per_student_parameters or student_id in per_student_parameters
-                ):
-                    params = per_student_parameters.get(str(student_id)) or per_student_parameters.get(student_id)
-                elif dynamic_parameters:
-                    student = log_item.student
-                    p_name = (student.parent_name if student and student.parent_name else "Parent").strip()
-                    s_name = (student.student_name if student and student.student_name else "Student").strip()
+                    params = None
+                    if per_student_parameters and (
+                        str(student_id) in per_student_parameters or student_id in per_student_parameters
+                    ):
+                        params = per_student_parameters.get(str(student_id)) or per_student_parameters.get(student_id)
+                    elif dynamic_parameters:
+                        student = log_item.student
+                        p_name = (student.parent_name if student and student.parent_name else "Parent").strip()
+                        s_name = (student.student_name if student and student.student_name else "Student").strip()
 
-                    fee_num = float(student.fees_due) if student and getattr(student, "fees_due", None) is not None else 0.0
-                    fee_str = f"₹{fee_num:,.2f}"
-                    if fee_str.endswith(".00"):
-                        fee_str = fee_str[:-3]
+                        fee_num = float(student.fees_due) if student and getattr(student, "fees_due", None) is not None else 0.0
+                        fee_str = f"₹{fee_num:,.2f}"
+                        if fee_str.endswith(".00"):
+                            fee_str = fee_str[:-3]
 
-                    resolved_list = []
-                    for param_str in dynamic_parameters:
-                        p_val = str(param_str)
-                        p_val = p_val.replace("{Parent Name}", p_name).replace("{{Parent Name}}", p_name)
-                        p_val = p_val.replace("{parent_name}", p_name).replace("{{parent_name}}", p_name)
-                        p_val = p_val.replace("{Student Name}", s_name).replace("{{Student Name}}", s_name)
-                        p_val = p_val.replace("{student_name}", s_name).replace("{{student_name}}", s_name)
-                        p_val = p_val.replace("{Fees Due}", fee_str).replace("{{Fees Due}}", fee_str)
-                        p_val = p_val.replace("{fees_due}", fee_str).replace("{{fees_due}}", fee_str)
-                        p_val = p_val.replace("{Fees Amount}", fee_str).replace("{{Fees Amount}}", fee_str)
-                        p_val = p_val.replace("{fees_amount}", fee_str).replace("{{fees_amount}}", fee_str)
-                        p_val = p_val.replace("{fees}", fee_str).replace("{{fees}}", fee_str)
-                        p_val = p_val.replace("{fee}", fee_str).replace("{{fee}}", fee_str)
-                        p_val = p_val.replace("{amount}", fee_str).replace("{{amount}}", fee_str)
-                        resolved_list.append(p_val)
-                    params = resolved_list
+                        cls = getattr(student, "school_class", None) if student else None
+                        if cls:
+                            clean_name = (cls.name or "").replace("Class ", "").replace("class ", "").strip()
+                            c_name = f"{clean_name}-{cls.section}" if cls.section else clean_name
+                        else:
+                            c_name = ""
 
-                result = await whatsapp_service.send_template_message(
-                    recipient_number=log_item.recipient_number,
-                    template_name=template_name,
-                    language_code=language_code,
-                    parameters=params,
-                    header_image_url=header_image_url,
-                )
+                        resolved_list = []
+                        for param_str in dynamic_parameters:
+                            p_val = str(param_str)
+                            p_val = p_val.replace("{Parent Name}", p_name).replace("{{Parent Name}}", p_name)
+                            p_val = p_val.replace("{parent_name}", p_name).replace("{{parent_name}}", p_name)
+                            p_val = p_val.replace("{Student Name}", s_name).replace("{{Student Name}}", s_name)
+                            p_val = p_val.replace("{student_name}", s_name).replace("{{student_name}}", s_name)
+                            p_val = p_val.replace("{Fees Due}", fee_str).replace("{{Fees Due}}", fee_str)
+                            p_val = p_val.replace("{fees_due}", fee_str).replace("{{fees_due}}", fee_str)
+                            p_val = p_val.replace("{Fees Amount}", fee_str).replace("{{Fees Amount}}", fee_str)
+                            p_val = p_val.replace("{fees_amount}", fee_str).replace("{{fees_amount}}", fee_str)
+                            p_val = p_val.replace("{fees}", fee_str).replace("{{fees}}", fee_str)
+                            p_val = p_val.replace("{fee}", fee_str).replace("{{fee}}", fee_str)
+                            p_val = p_val.replace("{amount}", fee_str).replace("{{amount}}", fee_str)
+                            p_val = p_val.replace("{Class Name}", c_name).replace("{{Class Name}}", c_name)
+                            p_val = p_val.replace("{class_name}", c_name).replace("{{class_name}}", c_name)
+                            resolved_list.append(p_val)
+                        params = resolved_list
 
-                @sync_to_async
-                def update_log():
-                    log_rec = MessageLog.objects.get(id=log_item.id)
-                    now_time = timezone.now()
-                    if result.get("success"):
-                        log_rec.status = "SENT"
-                        log_rec.whatsapp_message_id = result.get("message_id")
-                        log_rec.sent_at = now_time
-                        log_rec.error_message = None
-                    else:
-                        log_rec.status = "FAILED"
-                        log_rec.failed_at = now_time
-                        log_rec.error_message = result.get("error")
-                    log_rec.save()
+                    result = await whatsapp_service.send_template_message(
+                        recipient_number=log_item.recipient_number,
+                        template_name=template_name,
+                        language_code=language_code,
+                        parameters=params,
+                        header_image_url=header_image_url,
+                    )
 
-                    try:
-                        tpl = MessageTemplate.objects.filter(name=template_name).first()
-                        body_preview = tpl.body_preview if tpl else f"Template: {template_name}"
-                        if body_preview and params:
-                            for idx, val in enumerate(params, start=1):
-                                body_preview = body_preview.replace(f"{{{{{idx}}}}}", str(val)).replace(f"{{{idx}}}", str(val))
+                    @sync_to_async
+                    def update_log():
+                        log_rec = MessageLog.objects.get(id=log_item.id)
+                        now_time = timezone.now()
+                        if result.get("success"):
+                            log_rec.status = "SENT"
+                            log_rec.whatsapp_message_id = result.get("message_id")
+                            log_rec.sent_at = now_time
+                            log_rec.error_message = None
+                        else:
+                            log_rec.status = "FAILED"
+                            log_rec.failed_at = now_time
+                            log_rec.error_message = result.get("error")
+                        log_rec.save()
 
-                        media_img = header_image_url or (tpl.sample_image_url if tpl and (tpl.header_type or "").upper() == "IMAGE" else None)
+                        try:
+                            tpl = MessageTemplate.objects.filter(name=template_name).first()
+                            body_preview = tpl.body_preview if tpl else f"Template: {template_name}"
+                            if body_preview and params:
+                                for idx, val in enumerate(params, start=1):
+                                    body_preview = body_preview.replace(f"{{{{{idx}}}}}", str(val)).replace(f"{{{idx}}}", str(val))
 
-                        ChatMessage.objects.create(
-                            student=log_rec.student,
-                            phone_number=log_rec.recipient_number,
-                            direction="OUTBOUND",
-                            message_type="template",
-                            template_name=template_name,
-                            text_content=body_preview,
-                            media_url=media_img,
-                            status=log_rec.status,
-                            whatsapp_message_id=log_rec.whatsapp_message_id,
-                            message_log=log_rec,
-                            created_at=now_time,
-                        )
-                    except Exception as ex:
-                        logger.warning(f"[CampaignService] Could not mirror to ChatMessage: {ex}")
+                            media_img = header_image_url or (tpl.sample_image_url if tpl and (tpl.header_type or "").upper() == "IMAGE" else None)
 
-                    campaign = MessageCampaign.objects.get(id=campaign_id)
-                    if result.get("success"):
-                        campaign.successful_count += 1
-                    else:
-                        campaign.failed_count += 1
-                    campaign.save()
+                            ChatMessage.objects.create(
+                                student=log_rec.student,
+                                phone_number=log_rec.recipient_number,
+                                direction="OUTBOUND",
+                                message_type="template",
+                                template_name=template_name,
+                                text_content=body_preview,
+                                media_url=media_img,
+                                status=log_rec.status,
+                                whatsapp_message_id=log_rec.whatsapp_message_id,
+                                message_log=log_rec,
+                                created_at=now_time,
+                            )
+                        except Exception as ex:
+                            logger.warning(f"[CampaignService] Could not mirror to ChatMessage: {ex}")
 
-                await update_log()
+                    await update_log()
+
+                except Exception as ex:
+                    logger.error(f"[CampaignService] Unhandled exception sending log #{log_item.id}: {ex}", exc_info=True)
+                    @sync_to_async
+                    def mark_log_failed():
+                        try:
+                            log_rec = MessageLog.objects.get(id=log_item.id)
+                            log_rec.status = "FAILED"
+                            log_rec.failed_at = timezone.now()
+                            log_rec.error_message = str(ex)
+                            log_rec.save()
+                        except Exception as inner_ex:
+                            logger.error(f"[CampaignService] Could not save failed status for log #{log_item.id}: {inner_ex}")
+                    await mark_log_failed()
 
         tasks = [send_single_log(log_item) for log_item in queued_logs]
         await asyncio.gather(*tasks, return_exceptions=True)

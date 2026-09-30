@@ -42,6 +42,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
   const [imageUploading, setImageUploading] = useState(false);
   const [bodyText, setBodyText] = useState('');
   const [sampleValues, setSampleValues] = useState({});
+  const [variableMappings, setVariableMappings] = useState({});
 
   const pollingRef = useRef(null);
 
@@ -133,6 +134,18 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
     setBodyText((prev) => `${prev} {{${nextNum}}}`);
   };
 
+  const handleSelectTagForVariable = (varNum, tag) => {
+    setVariableMappings((prev) => ({ ...prev, [varNum]: tag }));
+    if (!sampleValues[varNum] || sampleValues[varNum].startsWith('Sample')) {
+      let sample = `Sample ${varNum}`;
+      if (tag.includes('Student')) sample = 'Rahul Sharma';
+      else if (tag.includes('Parent')) sample = 'Rajesh Sharma';
+      else if (tag.includes('Fee') || tag.includes('due') || tag.includes('amount')) sample = '₹4,500';
+      else if (tag.includes('Class')) sample = 'Class 10-A';
+      setSampleValues((prev) => ({ ...prev, [varNum]: sample }));
+    }
+  };
+
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -141,7 +154,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
     try {
       const objectUrl = URL.createObjectURL(file);
       setLocalPreviewUrl(objectUrl);
-    } catch (_) {}
+    } catch (_) { }
 
     setImageUploading(true);
     try {
@@ -224,6 +237,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
         sample_image_url: headerType === 'IMAGE' ? sampleImageUrl.trim() : null,
         body_text: bodyText,
         sample_values: orderedSamples,
+        variable_mappings: variableMappings,
         description: `Created from School WhatsApp UI on ${new Date().toLocaleDateString()}` + (headerType === 'IMAGE' ? ' [Image Header]' : ''),
       });
 
@@ -242,6 +256,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
       setSampleImageUrl('');
       setBodyText('');
       setSampleValues({});
+      setVariableMappings({});
       await fetchTemplates(true);
     } catch (err) {
       if (showToast) {
@@ -350,22 +365,20 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
           <button
             type="button"
             onClick={() => setFilterStatus('ALL')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${
-              filterStatus === 'ALL'
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${filterStatus === 'ALL'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
+              }`}
           >
             All ({templates.length})
           </button>
           <button
             type="button"
             onClick={() => setFilterStatus('ACTIVE')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
-              filterStatus === 'ACTIVE'
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${filterStatus === 'ACTIVE'
                 ? 'bg-emerald-600 text-white shadow-xs'
                 : 'bg-white text-emerald-700 hover:bg-emerald-50 border border-slate-200'
-            }`}
+              }`}
           >
             <CheckCircle2 className="w-3.5 h-3.5" />
             <span>Approved ({activeCount})</span>
@@ -373,11 +386,10 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
           <button
             type="button"
             onClick={() => setFilterStatus('PENDING')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
-              filterStatus === 'PENDING'
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${filterStatus === 'PENDING'
                 ? 'bg-amber-600 text-white shadow-xs'
                 : 'bg-white text-amber-700 hover:bg-amber-50 border border-slate-200'
-            }`}
+              }`}
           >
             <Clock className="w-3.5 h-3.5" />
             <span>Pending ({pendingCount})</span>
@@ -386,11 +398,10 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
             <button
               type="button"
               onClick={() => setFilterStatus('REJECTED')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
-                filterStatus === 'REJECTED'
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${filterStatus === 'REJECTED'
                   ? 'bg-rose-600 text-white shadow-xs'
                   : 'bg-white text-rose-700 hover:bg-rose-50 border border-slate-200'
-              }`}
+                }`}
             >
               <XCircle className="w-3.5 h-3.5" />
               <span>Rejected ({rejectedCount})</span>
@@ -434,13 +445,12 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
             return (
               <div
                 key={tpl.id}
-                className={`bg-white p-6 rounded-2xl border flex flex-col justify-between transition-all shadow-xs ${
-                  isActive
+                className={`bg-white p-6 rounded-2xl border flex flex-col justify-between transition-all shadow-xs ${isActive
                     ? 'border-emerald-300 hover:border-emerald-400 hover:shadow-sm'
                     : isPending
-                    ? 'border-amber-300 bg-amber-50/10 hover:border-amber-400'
-                    : 'border-slate-200 hover:border-slate-300'
-                }`}
+                      ? 'border-amber-300 bg-amber-50/10 hover:border-amber-400'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
               >
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
@@ -516,6 +526,23 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
                           tpl.body_preview || 'No preview available.'
                         )}
                       </div>
+
+                      {/* Display explicit variable mappings if defined */}
+                      {tpl.variable_mappings && Object.keys(tpl.variable_mappings).length > 0 && (
+                        <div className="pt-2 border-t border-slate-200/60 flex flex-wrap gap-1.5 items-center">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Defaults:</span>
+                          {Object.entries(tpl.variable_mappings).map(([k, v]) => (
+                            <span
+                              key={k}
+                              className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200"
+                            >
+                              <span className="font-bold">{`{{${k}}}`}</span>
+                              <span className="text-slate-400">→</span>
+                              <span className="font-semibold">{v}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -632,22 +659,20 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
               <button
                 type="button"
                 onClick={() => setHeaderType('NONE')}
-                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
-                  headerType === 'NONE'
+                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${headerType === 'NONE'
                     ? 'bg-emerald-50 border-emerald-500 text-emerald-800 shadow-xs'
                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
+                  }`}
               >
                 None (Text Body Only)
               </button>
               <button
                 type="button"
                 onClick={() => setHeaderType('IMAGE')}
-                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 ${
-                  headerType === 'IMAGE'
+                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 ${headerType === 'IMAGE'
                     ? 'bg-purple-50 border-purple-500 text-purple-800 shadow-xs'
                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
+                  }`}
               >
                 <ImageIcon className="w-3.5 h-3.5 text-purple-600" />
                 <span>Image Header</span>
@@ -655,11 +680,10 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
               <button
                 type="button"
                 onClick={() => setHeaderType('TEXT')}
-                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
-                  headerType === 'TEXT'
+                className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${headerType === 'TEXT'
                     ? 'bg-blue-50 border-blue-500 text-blue-800 shadow-xs'
                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
+                  }`}
               >
                 Text Header
               </button>
@@ -741,31 +765,93 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
             </p>
           </div>
 
-          {/* Sample Variables Inputs if detected */}
+          {/* Explicit Variable Mappings & Sample Variables */}
           {detectedVariables.length > 0 && (
-            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-              <div className="flex items-center gap-2">
-                <HelpCircle className="w-4 h-4 text-emerald-600" />
-                <span className="text-xs font-bold text-slate-800">
-                  Meta Sample Values (Required by Meta for Review)
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4 text-emerald-600" />
+                  <span className="text-xs font-bold text-slate-800">
+                    Define Variable Mappings &amp; Meta Review Samples
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-500">
+                  Auto-fills dynamically during broadcasts
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+              <div className="space-y-3">
                 {detectedVariables.map((v) => (
-                  <div key={v} className="space-y-1">
-                    <label className="text-[11px] font-mono font-bold text-slate-700">
-                      Sample for &#123;&#123;{v}&#125;&#125; <span className="text-rose-600">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder={`e.g. Rahul Sharma or 25th Oct`}
-                      value={sampleValues[v] || ''}
-                      onChange={(e) =>
-                        setSampleValues((prev) => ({ ...prev, [v]: e.target.value }))
-                      }
-                      className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-emerald-600"
-                    />
+                  <div key={v} className="p-3 bg-white border border-slate-200 rounded-xl space-y-2.5 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                        Placeholder &#123;&#123;{v}&#125;&#125;
+                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] text-slate-400 font-semibold">Quick Tags:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTagForVariable(v, '{Student Name}')}
+                          className="px-2 py-0.5 bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-700 rounded text-[10px] font-semibold transition-colors cursor-pointer"
+                        >
+                          + Student Name
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTagForVariable(v, '{Parent Name}')}
+                          className="px-2 py-0.5 bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-700 rounded text-[10px] font-semibold transition-colors cursor-pointer"
+                        >
+                          + Parent Name
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTagForVariable(v, '{Fees Due}')}
+                          className="px-2 py-0.5 bg-slate-100 hover:bg-amber-100 hover:text-amber-800 text-slate-700 rounded text-[10px] font-semibold transition-colors cursor-pointer"
+                        >
+                          + Fees Due
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTagForVariable(v, '{Class Name}')}
+                          className="px-2 py-0.5 bg-slate-100 hover:bg-blue-100 hover:text-blue-800 text-slate-700 rounded text-[10px] font-semibold transition-colors cursor-pointer"
+                        >
+                          + Class Name
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-700 block">
+                          Expected Dynamic / Default Value
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. {Student Name}, {Fees Due}, or static text"
+                          value={variableMappings[v] || ''}
+                          onChange={(e) =>
+                            setVariableMappings((prev) => ({ ...prev, [v]: e.target.value }))
+                          }
+                          className="w-full bg-slate-50/70 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-emerald-600 focus:bg-white"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-700 block">
+                          Meta Sample for Review <span className="text-rose-600">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. Rahul Sharma or 25th Oct"
+                          value={sampleValues[v] || ''}
+                          onChange={(e) =>
+                            setSampleValues((prev) => ({ ...prev, [v]: e.target.value }))
+                          }
+                          className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-emerald-600"
+                        />
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>

@@ -72,7 +72,13 @@ export const ConversationDrawer = ({
   if (!isOpen) return null;
 
   const student = conversation?.student;
-  const messages = conversation?.messages || [];
+  const rawMessages = conversation?.messages || [];
+  // Exclude queued, failed, skipped, or unconfirmed sent messages; only show delivered, read, or inbound
+  const messages = rawMessages.filter((msg) => {
+    if (msg.direction === 'INBOUND') return true;
+    const st = (msg.status || '').toUpperCase();
+    return st === 'DELIVERED' || st === 'READ';
+  });
   const displayName = student?.student_name || conversation?.recipient_name || initialStudentName || 'User Conversation';
   const displayPhone = student?.whatsapp_number || conversation?.phone_number || phoneNumber || '';
 

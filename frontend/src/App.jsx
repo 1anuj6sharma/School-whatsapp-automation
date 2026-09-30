@@ -23,6 +23,9 @@ export function App() {
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
+  const [sendWorkflow, setSendWorkflow] = useState('FEES');
+  const [sendStudentIds, setSendStudentIds] = useState(null);
+  const [sendClassIds, setSendClassIds] = useState(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { toasts, addToast, removeToast } = useNotification();
 
@@ -83,10 +86,24 @@ export function App() {
     });
   };
 
-  const handleNavigate = (tab, campaignId) => {
-    if (tab === 'campaign-detail' && campaignId) {
-      setSelectedCampaignId(campaignId);
+  const handleNavigate = (tab, extra) => {
+    if (tab === 'campaign-detail' && extra) {
+      setSelectedCampaignId(extra);
       setActiveTab('campaign-detail');
+    } else if (tab === 'send-message') {
+      if (typeof extra === 'string') {
+        setSendWorkflow(extra);
+        setSendStudentIds(null);
+        setSendClassIds(null);
+      } else if (extra?.workflow) {
+        setSendWorkflow(extra.workflow);
+        setSendStudentIds(extra.studentIds || null);
+        setSendClassIds(extra.classIds || null);
+      } else {
+        setSendStudentIds(null);
+        setSendClassIds(null);
+      }
+      setActiveTab('send-message');
     } else {
       setActiveTab(tab);
     }
@@ -171,11 +188,20 @@ export function App() {
           {activeTab === 'dashboard' && <DashboardPage onNavigate={handleNavigate} />}
           {activeTab === 'send-message' && (
             <SendMessagePage
+              key={`${sendWorkflow}-${(sendStudentIds || []).join(',')}-${(sendClassIds || []).join(',')}`}
+              initialWorkflow={sendWorkflow}
+              initialStudentIds={sendStudentIds}
+              initialClassIds={sendClassIds}
               onNavigateToCampaign={(id) => handleNavigate('campaign-detail', id)}
               showToast={addToast}
             />
           )}
-          {activeTab === 'students' && <StudentsPage showToast={addToast} />}
+          {activeTab === 'students' && (
+            <StudentsPage
+              onNavigateToSendMessage={(navData) => handleNavigate('send-message', navData)}
+              showToast={addToast}
+            />
+          )}
           {activeTab === 'classes' && (
             <ClassesPage
               onNavigateToSendMessage={() => setActiveTab('send-message')}

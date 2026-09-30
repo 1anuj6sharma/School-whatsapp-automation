@@ -224,6 +224,15 @@ export const api = {
     return handleResponse(res);
   },
 
+  async updateTemplate(id, data) {
+    const res = await fetch(`${API_BASE}/api/templates/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
   async deleteTemplate(id) {
     const res = await fetch(`${API_BASE}/api/templates/${id}`, {
       method: 'DELETE',

@@ -51,6 +51,7 @@ class MessageTemplate(models.Model):
     header_type = models.CharField(max_length=30, default="NONE", null=True, blank=True) # NONE, TEXT, IMAGE, DOCUMENT, VIDEO
     header_text = models.CharField(max_length=255, null=True, blank=True)
     sample_image_url = models.CharField(max_length=500, null=True, blank=True)
+    variable_mappings = models.JSONField(default=dict, blank=True, null=True, help_text="Explicit default mappings for {{1}}, {{2}}, etc.")
     status = models.CharField(max_length=30, default="PENDING")  # ACTIVE, PENDING, REJECTED
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)

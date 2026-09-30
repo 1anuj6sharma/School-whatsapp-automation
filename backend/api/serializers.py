@@ -136,6 +136,7 @@ class TemplateSerializer(serializers.ModelSerializer):
             "header_type",
             "header_text",
             "sample_image_url",
+            "variable_mappings",
             "status",
             "created_at",
             "updated_at",
@@ -151,6 +152,7 @@ class TemplateCreateMetaSerializer(serializers.Serializer):
     sample_image_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     body_text = serializers.CharField()
     sample_values = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    variable_mappings = serializers.DictField(required=False, default=dict)
     description = serializers.CharField(required=False, allow_blank=True)
 
 

@@ -1,11 +1,29 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Users, UserPlus, Search, Edit2, Trash2, CheckCircle2, XCircle, FileSpreadsheet, UploadCloud, FileText, Info, Download } from 'lucide-react';
+import {
+  Users,
+  UserPlus,
+  Search,
+  Edit2,
+  Trash2,
+  CheckCircle2,
+  XCircle,
+  FileSpreadsheet,
+  UploadCloud,
+  FileText,
+  Info,
+  Download,
+  ChevronDown,
+  Receipt,
+  Megaphone,
+  Send,
+  Zap,
+} from 'lucide-react';
 import { api } from '../services/api';
 import { Modal } from '../components/Modal';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { EmptyState } from '../components/EmptyState';
 
-export const StudentsPage = ({ showToast }) => {
+export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
   const [students, setStudents] = useState([]);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -15,6 +33,21 @@ export const StudentsPage = ({ showToast }) => {
   const [selectedClassId, setSelectedClassId] = useState('');
   const [optInFilter, setOptInFilter] = useState('ALL');
   const [feeFilter, setFeeFilter] = useState('ALL');
+
+  // Action Dropdown Menu
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const actionMenuRef = useRef(null);
+
+  // Close Action dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (actionMenuRef.current && !actionMenuRef.current.contains(event.target)) {
+        setActionMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
@@ -329,13 +362,14 @@ export const StudentsPage = ({ showToast }) => {
           </div>
           <button
             type="submit"
-            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold border border-slate-200 transition-colors shrink-0"
+            className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold border border-slate-200 transition-all shrink-0 cursor-pointer shadow-2xs active:scale-95 flex items-center gap-1.5"
+            title="Search"
           >
-            Search
+            <span>Search</span>
           </button>
         </form>
 
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-2.5 w-full md:w-auto">
           <select
             value={selectedClassId}
             onChange={(e) => setSelectedClassId(e.target.value)}
@@ -368,6 +402,151 @@ export const StudentsPage = ({ showToast }) => {
             <option value="OPTED_IN">Opted In Only</option>
             <option value="OPTED_OUT">Opted Out Only</option>
           </select>
+
+          {/* Action Dropdown Menu to the right of All Consent Status */}
+          <div className="relative shrink-0" ref={actionMenuRef}>
+            <button
+              type="button"
+              onClick={() => setActionMenuOpen((prev) => !prev)}
+              className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all active:scale-95 cursor-pointer"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span>Action</span>
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-300 transition-transform duration-200 ${actionMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {actionMenuOpen && (
+              <div className="absolute right-0 mt-2 w-64 bg-white rounded-2xl border border-slate-200 shadow-xl z-50 py-1.5 animate-in fade-in zoom-in-95 duration-150">
+                <div className="px-3 py-1.5 border-b border-slate-100">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Broadcast Workflows
+                  </p>
+                </div>
+
+                <div className="p-1 space-y-1">
+                  {/* Option 1: Fees Reminder */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionMenuOpen(false);
+                      if (onNavigateToSendMessage) {
+                        const filteredStudentIds = students.map((s) => s.id);
+                        let filteredClassIds = [];
+                        if (selectedClassId) {
+                          filteredClassIds = [Number(selectedClassId)];
+                        } else {
+                          const cSet = new Set();
+                          students.forEach((s) => {
+                            const cid = s.class_id || (s.school_class && s.school_class.id);
+                            if (cid) cSet.add(Number(cid));
+                          });
+                          filteredClassIds = Array.from(cSet);
+                        }
+                        onNavigateToSendMessage({
+                          workflow: 'FEES',
+                          studentIds: filteredStudentIds,
+                          classIds: filteredClassIds.length > 0 ? filteredClassIds : (classes.length > 0 ? [classes[0].id] : []),
+                        });
+                      }
+                    }}
+                    className="w-full flex items-start gap-2.5 p-2 rounded-xl text-left hover:bg-amber-50/80 transition-colors group cursor-pointer"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-amber-200 transition-colors">
+                      <Receipt className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold text-slate-800 group-hover:text-amber-900">
+                        Fees Reminder
+                      </p>
+                      <p className="text-[10px] text-slate-500 leading-tight">
+                        Broadcast dues &amp; reminders to parents
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* Option 2: Announcement */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionMenuOpen(false);
+                      if (onNavigateToSendMessage) {
+                        const filteredStudentIds = students.map((s) => s.id);
+                        let filteredClassIds = [];
+                        if (selectedClassId) {
+                          filteredClassIds = [Number(selectedClassId)];
+                        } else {
+                          const cSet = new Set();
+                          students.forEach((s) => {
+                            const cid = s.class_id || (s.school_class && s.school_class.id);
+                            if (cid) cSet.add(Number(cid));
+                          });
+                          filteredClassIds = Array.from(cSet);
+                        }
+                        onNavigateToSendMessage({
+                          workflow: 'ANNOUNCEMENT',
+                          studentIds: filteredStudentIds,
+                          classIds: filteredClassIds.length > 0 ? filteredClassIds : (classes.length > 0 ? [classes[0].id] : []),
+                        });
+                      }
+                    }}
+                    className="w-full flex items-start gap-2.5 p-2 rounded-xl text-left hover:bg-purple-50/80 transition-colors group cursor-pointer"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-purple-200 transition-colors">
+                      <Megaphone className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold text-slate-800 group-hover:text-purple-900">
+                        Announcement
+                      </p>
+                      <p className="text-[10px] text-slate-500 leading-tight">
+                        Broadcast notices, circulars &amp; events
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* Option 3: Normal Workflow */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionMenuOpen(false);
+                      if (onNavigateToSendMessage) {
+                        const filteredStudentIds = students.map((s) => s.id);
+                        let filteredClassIds = [];
+                        if (selectedClassId) {
+                          filteredClassIds = [Number(selectedClassId)];
+                        } else {
+                          const cSet = new Set();
+                          students.forEach((s) => {
+                            const cid = s.class_id || (s.school_class && s.school_class.id);
+                            if (cid) cSet.add(Number(cid));
+                          });
+                          filteredClassIds = Array.from(cSet);
+                        }
+                        onNavigateToSendMessage({
+                          workflow: 'NORMAL',
+                          studentIds: filteredStudentIds,
+                          classIds: filteredClassIds.length > 0 ? filteredClassIds : (classes.length > 0 ? [classes[0].id] : []),
+                        });
+                      }
+                    }}
+                    className="w-full flex items-start gap-2.5 p-2 rounded-xl text-left hover:bg-emerald-50/80 transition-colors group cursor-pointer"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-emerald-200 transition-colors">
+                      <Send className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold text-slate-800 group-hover:text-emerald-900">
+                        Normal Workflow
+                      </p>
+                      <p className="text-[10px] text-slate-500 leading-tight">
+                        Standard catalog templates broadcast
+                      </p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -420,11 +599,10 @@ export const StudentsPage = ({ showToast }) => {
                       +{student.whatsapp_number}
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 rounded-md text-xs font-bold font-mono ${
-                        Number(student.fees_due || 0) > 0 
-                          ? 'bg-amber-50 text-amber-800 border border-amber-200' 
+                      <span className={`px-2.5 py-1 rounded-md text-xs font-bold font-mono ${Number(student.fees_due || 0) > 0
+                          ? 'bg-amber-50 text-amber-800 border border-amber-200'
                           : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      }`}>
+                        }`}>
                         {Number(student.fees_due || 0) > 0
                           ? `₹${Number(student.fees_due).toLocaleString('en-IN')} Due`
                           : '₹0 Paid'}
@@ -433,11 +611,10 @@ export const StudentsPage = ({ showToast }) => {
                     <td className="px-6 py-4">
                       <button
                         onClick={() => handleToggleOptIn(student)}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all ${
-                          student.whatsapp_opt_in
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all ${student.whatsapp_opt_in
                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                             : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-                        }`}
+                          }`}
                         title="Click to toggle consent"
                       >
                         {student.whatsapp_opt_in ? (
@@ -786,11 +963,10 @@ export const StudentsPage = ({ showToast }) => {
 
             <div
               onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer transition-all ${
-                importFile
+              className={`border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer transition-all ${importFile
                   ? 'border-emerald-500 bg-emerald-50/40'
                   : 'border-slate-300 hover:border-emerald-500 bg-slate-50/60 hover:bg-emerald-50/20'
-              }`}
+                }`}
             >
               {importFile ? (
                 <div className="space-y-1.5">

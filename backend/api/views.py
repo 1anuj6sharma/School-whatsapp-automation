@@ -447,6 +447,7 @@ class TemplateListCreateView(APIView):
             header_type=meta_result.get("header_type", data.get("header_type", "NONE")),
             header_text=meta_result.get("header_text", data.get("header_text")),
             sample_image_url=meta_result.get("sample_image_url", data.get("sample_image_url")),
+            variable_mappings=data.get("variable_mappings", {}),
         )
         return Response(TemplateSerializer(template).data, status=status.HTTP_201_CREATED)
 
@@ -462,6 +463,9 @@ class TemplateSyncView(APIView):
             )
 
         for item in meta_templates:
+            existing = MessageTemplate.objects.filter(name=item["name"]).first()
+            var_map = existing.variable_mappings if existing and existing.variable_mappings else {}
+
             MessageTemplate.objects.update_or_create(
                 name=item["name"],
                 defaults={
@@ -472,6 +476,7 @@ class TemplateSyncView(APIView):
                     "description": item.get("description", f"Meta {item['category']} Template"),
                     "header_type": item.get("header_type", "NONE"),
                     "header_text": item.get("header_text"),
+                    "variable_mappings": var_map,
                 }
             )
 
@@ -480,6 +485,18 @@ class TemplateSyncView(APIView):
 
 
 class TemplateDetailView(APIView):
+    def patch(self, request, pk):
+        try:
+            template = MessageTemplate.objects.get(pk=pk)
+        except MessageTemplate.DoesNotExist:
+            return Response({"detail": "Template not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if "variable_mappings" in request.data:
+            template.variable_mappings = request.data["variable_mappings"]
+            template.save(update_fields=["variable_mappings", "updated_at"])
+
+        return Response(TemplateSerializer(template).data)
+
     def delete(self, request, pk):
         try:
             template = MessageTemplate.objects.get(pk=pk)
@@ -912,49 +929,90 @@ class ConversationDetailView(APIView):
             if len(phone) >= 10:
                 filter_q |= Q(phone_number__endswith=phone[-10:])
 
-        chat_messages = list(
+        # Only include delivered, read, or inbound messages
+        allowed_statuses = ["DELIVERED", "READ"]
+        status_filter = Q(direction="INBOUND") | Q(status__in=allowed_statuses)
+
+        raw_messages = list(
             ChatMessage.objects.filter(filter_q)
+            .filter(status_filter)
             .select_related("student", "student__school_class")
             .order_by("created_at")
         )
 
-        # Mirror any historical MessageLogs not in ChatMessage
-        existing_wamids = {m.whatsapp_message_id for m in chat_messages if m.whatsapp_message_id}
-        log_q = Q()
-        if student:
-            log_q |= Q(student=student)
-        if phone:
-            log_q |= Q(recipient_number=phone)
-            if len(phone) >= 10:
-                log_q |= Q(recipient_number__endswith=phone[-10:])
-
-        unmirrored_logs = MessageLog.objects.filter(log_q)
-        if existing_wamids:
-            unmirrored_logs = unmirrored_logs.exclude(whatsapp_message_id__in=existing_wamids)
-
-        for log_entry in unmirrored_logs:
-            tpl = MessageTemplate.objects.filter(name=log_entry.template_name).first()
-            body_preview = tpl.body_preview if tpl else f"Template: {log_entry.template_name}"
-            media_img = None
-            if log_entry.campaign and log_entry.campaign.header_image_url:
-                media_img = log_entry.campaign.header_image_url
-            elif tpl and (tpl.header_type or "").upper() == "IMAGE":
-                media_img = tpl.sample_image_url
-
-            new_chat_msg = ChatMessage.objects.create(
-                student=log_entry.student or student,
-                phone_number=log_entry.recipient_number,
-                direction="OUTBOUND",
-                message_type="template",
-                template_name=log_entry.template_name,
-                text_content=body_preview,
-                media_url=media_img,
-                status=log_entry.status,
-                whatsapp_message_id=log_entry.whatsapp_message_id,
-                message_log=log_entry,
-                created_at=log_entry.sent_at or log_entry.created_at,
+        # Deduplicate any duplicate ChatMessage records in DB
+        seen_keys = set()
+        chat_messages = []
+        for msg in raw_messages:
+            key = (
+                msg.whatsapp_message_id
+                if (msg.whatsapp_message_id and msg.whatsapp_message_id.strip())
+                else (f"log_{msg.message_log_id}" if msg.message_log_id else f"{msg.direction}_{msg.text_content}_{msg.created_at}")
             )
-            chat_messages.append(new_chat_msg)
+            if key in seen_keys:
+                try:
+                    msg.delete()
+                except Exception:
+                    pass
+            else:
+                seen_keys.add(key)
+                chat_messages.append(msg)
+
+        # Mirror historical MessageLogs only if they are DELIVERED or READ and have NO ChatMessage record
+        if student or phone:
+            existing_log_ids = {m.message_log_id for m in chat_messages if m.message_log_id}
+            existing_wamids = {m.whatsapp_message_id for m in chat_messages if m.whatsapp_message_id}
+            
+            log_q = Q(status__in=allowed_statuses)
+            if student:
+                log_sub = Q(student=student)
+                if student.whatsapp_number:
+                    log_sub |= Q(recipient_number=student.whatsapp_number)
+                log_q &= log_sub
+            if phone:
+                log_sub = Q(recipient_number=phone)
+                if len(phone) >= 10:
+                    log_sub |= Q(recipient_number__endswith=phone[-10:])
+                log_q &= log_sub
+
+            unmirrored_logs = MessageLog.objects.filter(log_q)
+            if existing_log_ids:
+                unmirrored_logs = unmirrored_logs.exclude(id__in=existing_log_ids)
+            if existing_wamids:
+                unmirrored_logs = unmirrored_logs.exclude(whatsapp_message_id__in=existing_wamids)
+
+            for log_entry in unmirrored_logs:
+                # Direct DB check to avoid any duplicate creation
+                has_existing = ChatMessage.objects.filter(
+                    Q(message_log=log_entry) | 
+                    (Q(whatsapp_message_id=log_entry.whatsapp_message_id) & ~Q(whatsapp_message_id=None) & ~Q(whatsapp_message_id=""))
+                ).exists()
+
+                if has_existing:
+                    continue
+
+                tpl = MessageTemplate.objects.filter(name=log_entry.template_name).first()
+                body_preview = tpl.body_preview if tpl else f"Template: {log_entry.template_name}"
+                media_img = None
+                if log_entry.campaign and log_entry.campaign.header_image_url:
+                    media_img = log_entry.campaign.header_image_url
+                elif tpl and (tpl.header_type or "").upper() == "IMAGE":
+                    media_img = tpl.sample_image_url
+
+                new_chat_msg = ChatMessage.objects.create(
+                    student=log_entry.student or student,
+                    phone_number=log_entry.recipient_number,
+                    direction="OUTBOUND",
+                    message_type="template",
+                    template_name=log_entry.template_name,
+                    text_content=body_preview,
+                    media_url=media_img,
+                    status=log_entry.status,
+                    whatsapp_message_id=log_entry.whatsapp_message_id,
+                    message_log=log_entry,
+                    created_at=log_entry.sent_at or log_entry.created_at,
+                )
+                chat_messages.append(new_chat_msg)
 
         # Attach image media_url if message template has an image header
         for m in chat_messages:

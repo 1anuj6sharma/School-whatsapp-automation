@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
   Send,
   Users,
@@ -97,9 +97,13 @@ const filterTemplatesForWorkflow = (workflow, allTemplates) => {
 export const SendMessagePage = ({
   onNavigateToCampaign,
   showToast,
+  initialWorkflow = 'FEES',
+  initialStudentIds = null,
+  initialClassIds = null,
 }) => {
   // Workflow Tab: 'FEES' | 'ANNOUNCEMENT' | 'NORMAL' (Default: 'FEES')
-  const [activeWorkflow, setActiveWorkflow] = useState('FEES');
+  const [activeWorkflow, setActiveWorkflow] = useState(initialWorkflow || 'FEES');
+  const initialAppliedRef = React.useRef(false);
 
   const [classes, setClasses] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -141,18 +145,44 @@ export const SendMessagePage = ({
         setClasses(classesData);
         setTemplates(templatesData);
 
-        // Auto-select all classes for FEES workflow initially
-        if (classesData.length > 0) {
-          setSelectedClassIds(classesData.map((c) => c.id));
+        const startWf = initialWorkflow || 'FEES';
+        setActiveWorkflow(startWf);
+
+        // Auto-select classes according to initialClassIds or workflow
+        if (initialClassIds && Array.isArray(initialClassIds) && initialClassIds.length > 0) {
+          setSelectedClassIds(initialClassIds);
+        } else if (startWf === 'FEES' || startWf === 'ANNOUNCEMENT') {
+          if (classesData.length > 0) {
+            setSelectedClassIds(classesData.map((c) => c.id));
+          }
+        } else {
+          if (classesData.length > 0) {
+            setSelectedClassIds([classesData[0].id]);
+          }
         }
 
-        // Auto-select initial fee template
-        const feeTpls = filterTemplatesForWorkflow('FEES', templatesData);
-        const activeTpl =
-          feeTpls.find((t) => (t.status === 'ACTIVE' || t.status === 'APPROVED') && t.name.toLowerCase().includes('fee')) ||
-          feeTpls.find((t) => t.status === 'ACTIVE' || t.status === 'APPROVED') ||
-          feeTpls[0] ||
-          templatesData[0];
+        // Auto-select initial matching template
+        const wfTpls = filterTemplatesForWorkflow(startWf, templatesData);
+        let activeTpl = null;
+        if (startWf === 'ANNOUNCEMENT') {
+          activeTpl =
+            wfTpls.find((t) => (t.status === 'ACTIVE' || t.status === 'APPROVED') && t.name.toLowerCase() === 'school_announcement') ||
+            wfTpls.find((t) => (t.status === 'ACTIVE' || t.status === 'APPROVED') && t.name.toLowerCase().includes('announcement')) ||
+            wfTpls.find((t) => t.status === 'ACTIVE' || t.status === 'APPROVED') ||
+            wfTpls[0] ||
+            templatesData[0];
+        } else if (startWf === 'FEES') {
+          activeTpl =
+            wfTpls.find((t) => (t.status === 'ACTIVE' || t.status === 'APPROVED') && t.name.toLowerCase().includes('fee')) ||
+            wfTpls.find((t) => t.status === 'ACTIVE' || t.status === 'APPROVED') ||
+            wfTpls[0] ||
+            templatesData[0];
+        } else {
+          activeTpl =
+            wfTpls.find((t) => t.status === 'ACTIVE' || t.status === 'APPROVED') ||
+            wfTpls[0] ||
+            templatesData[0];
+        }
 
         if (activeTpl) {
           setSelectedTemplateId(activeTpl.id);
@@ -235,6 +265,13 @@ export const SendMessagePage = ({
     }
   };
 
+  // Sync workflow if initialWorkflow prop changes dynamically while component is active
+  useEffect(() => {
+    if (initialWorkflow && templates.length > 0 && initialWorkflow !== activeWorkflow) {
+      handleWorkflowChange(initialWorkflow);
+    }
+  }, [initialWorkflow]);
+
   // Fetch students whenever selectedClassIds change
   useEffect(() => {
     if (!selectedClassIds || selectedClassIds.length === 0) {
@@ -255,15 +292,36 @@ export const SendMessagePage = ({
           eligible = data.filter((s) => Number(s.fees_due || 0) > 0);
         }
 
-        // By default, select all opted-in eligible students across selected classes
-        const optedInIds = eligible.filter((s) => s.whatsapp_opt_in).map((s) => s.id);
-        setSelectedStudentIds(optedInIds);
-        if (eligible.length > 0) {
-          setPreviewStudentId(eligible[0].id);
-        } else if (data.length > 0) {
-          setPreviewStudentId(data[0].id);
+        // If initialStudentIds was provided from student list filter, apply it
+        if (
+          !initialAppliedRef.current &&
+          initialStudentIds &&
+          Array.isArray(initialStudentIds) &&
+          initialStudentIds.length > 0
+        ) {
+          initialAppliedRef.current = true;
+          const matchedIds = data
+            .filter((s) => initialStudentIds.includes(s.id) && s.whatsapp_opt_in)
+            .map((s) => s.id);
+          setSelectedStudentIds(matchedIds);
+          if (matchedIds.length > 0) {
+            setPreviewStudentId(matchedIds[0]);
+          } else if (data.length > 0) {
+            setPreviewStudentId(data[0].id);
+          } else {
+            setPreviewStudentId(null);
+          }
         } else {
-          setPreviewStudentId(null);
+          // By default, select all opted-in eligible students across selected classes
+          const optedInIds = eligible.filter((s) => s.whatsapp_opt_in).map((s) => s.id);
+          setSelectedStudentIds(optedInIds);
+          if (eligible.length > 0) {
+            setPreviewStudentId(eligible[0].id);
+          } else if (data.length > 0) {
+            setPreviewStudentId(data[0].id);
+          } else {
+            setPreviewStudentId(null);
+          }
         }
       } catch (err) {
         showToast({
@@ -310,9 +368,19 @@ export const SendMessagePage = ({
     if (detectedVariables.length > 0) {
       const initialVars = {};
       const tName = (selectedTemplate?.name || '').toLowerCase();
+      const explicitMappings = selectedTemplate?.variable_mappings || {};
 
       detectedVariables.forEach((num) => {
-        if (activeWorkflow === 'FEES' || tName.includes('fee')) {
+        // Priority 1: Explicit DB mapping saved during template creation
+        if (
+          explicitMappings[num] !== undefined &&
+          explicitMappings[num] !== null &&
+          explicitMappings[num].toString().trim() !== ''
+        ) {
+          initialVars[num] = explicitMappings[num];
+        }
+        // Priority 2: Intelligent heuristic rules based on workflow & template name
+        else if (activeWorkflow === 'FEES' || tName.includes('fee')) {
           if (num === '1') initialVars[num] = '{Parent Name}';
           else if (num === '2') initialVars[num] = '{Student Name}';
           else if (num === '3') initialVars[num] = '{Fees Due}';
@@ -420,6 +488,7 @@ export const SendMessagePage = ({
     let resolved = val;
     const parentName = student?.parent_name || 'Parent';
     const studentName = student?.student_name || 'Student';
+    const className = student?.class_name || '';
     const feeAmount = student?.fees_due !== undefined && student?.fees_due !== null
       ? `₹${Number(student.fees_due).toLocaleString('en-IN')}`
       : '₹0';
@@ -433,6 +502,11 @@ export const SendMessagePage = ({
     resolved = resolved.replaceAll('{{Student Name}}', studentName);
     resolved = resolved.replaceAll('{student_name}', studentName);
     resolved = resolved.replaceAll('{{student_name}}', studentName);
+
+    resolved = resolved.replaceAll('{Class Name}', className);
+    resolved = resolved.replaceAll('{{Class Name}}', className);
+    resolved = resolved.replaceAll('{class_name}', className);
+    resolved = resolved.replaceAll('{{class_name}}', className);
 
     resolved = resolved.replaceAll('{Fees Due}', feeAmount);
     resolved = resolved.replaceAll('{{Fees Due}}', feeAmount);
@@ -588,6 +662,19 @@ export const SendMessagePage = ({
       return;
     }
 
+    // Verify all detected variables have a value entered
+    for (const v of detectedVariables) {
+      const val = (templateVariables[v] || '').trim();
+      if (!val) {
+        showToast({
+          type: 'warning',
+          title: `Variable {{${v}}} is empty`,
+          message: `Please enter the common text or select a dynamic tag for placeholder {{${v}}}.`,
+        });
+        return;
+      }
+    }
+
     setShowConfirmModal(true);
   };
 
@@ -652,8 +739,8 @@ export const SendMessagePage = ({
           type="button"
           onClick={() => handleWorkflowChange('FEES')}
           className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${activeWorkflow === 'FEES'
-              ? 'bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-white border-amber-500 ring-2 ring-amber-500/20 shadow-md'
-              : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
+            ? 'bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-white border-amber-500 ring-2 ring-amber-500/20 shadow-md'
+            : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
             }`}
         >
           <div className="flex items-start justify-between gap-2">
@@ -687,8 +774,8 @@ export const SendMessagePage = ({
           type="button"
           onClick={() => handleWorkflowChange('ANNOUNCEMENT')}
           className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${activeWorkflow === 'ANNOUNCEMENT'
-              ? 'bg-gradient-to-br from-purple-500/10 via-purple-500/5 to-white border-purple-500 ring-2 ring-purple-500/20 shadow-md'
-              : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
+            ? 'bg-gradient-to-br from-purple-500/10 via-purple-500/5 to-white border-purple-500 ring-2 ring-purple-500/20 shadow-md'
+            : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
             }`}
         >
           <div className="flex items-start justify-between gap-2">
@@ -722,8 +809,8 @@ export const SendMessagePage = ({
           type="button"
           onClick={() => handleWorkflowChange('NORMAL')}
           className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${activeWorkflow === 'NORMAL'
-              ? 'bg-gradient-to-br from-emerald-500/10 via-emerald-500/5 to-white border-emerald-600 ring-2 ring-emerald-600/20 shadow-md'
-              : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
+            ? 'bg-gradient-to-br from-emerald-500/10 via-emerald-500/5 to-white border-emerald-600 ring-2 ring-emerald-600/20 shadow-md'
+            : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-xs'
             }`}
         >
           <div className="flex items-start justify-between gap-2">
@@ -795,8 +882,8 @@ export const SendMessagePage = ({
                     type="button"
                     onClick={() => handleToggleClass(c.id)}
                     className={`p-2.5 rounded-xl border text-left transition-all flex items-center justify-between gap-2 cursor-pointer ${isChecked
-                        ? 'bg-emerald-50/80 border-emerald-500 text-emerald-950 ring-1 ring-emerald-500/20 shadow-xs'
-                        : 'bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-white hover:border-slate-300'
+                      ? 'bg-emerald-50/80 border-emerald-500 text-emerald-950 ring-1 ring-emerald-500/20 shadow-xs'
+                      : 'bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-white hover:border-slate-300'
                       }`}
                   >
                     <div className="truncate">
@@ -903,6 +990,13 @@ export const SendMessagePage = ({
                             className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 hover:bg-amber-200 text-amber-800 transition-colors cursor-pointer"
                           >
                             + {'{Fees Due}'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleInsertTag(num, '{Class Name}')}
+                            className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-100 hover:bg-blue-200 text-blue-800 transition-colors cursor-pointer"
+                          >
+                            + {'{Class Name}'}
                           </button>
                         </div>
                       </div>
@@ -1053,10 +1147,10 @@ export const SendMessagePage = ({
                             if (isOptedIn) handleToggleStudent(s.id);
                           }}
                           className={`w-5 h-5 rounded-md flex items-center justify-center transition-colors shrink-0 ${!isOptedIn
-                              ? 'bg-slate-100 border-slate-200 text-slate-300 cursor-not-allowed'
-                              : isSelected
-                                ? 'bg-emerald-600 text-white'
-                                : 'border border-slate-300 bg-white hover:border-emerald-500'
+                            ? 'bg-slate-100 border-slate-200 text-slate-300 cursor-not-allowed'
+                            : isSelected
+                              ? 'bg-emerald-600 text-white'
+                              : 'border border-slate-300 bg-white hover:border-emerald-500'
                             }`}
                         >
                           {isSelected && <CheckSquare className="w-4 h-4" />}
@@ -1088,8 +1182,8 @@ export const SendMessagePage = ({
                         {/* Fees Due Badge */}
                         <div
                           className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${feesAmount > 0
-                              ? 'bg-amber-50 text-amber-800 border-amber-200'
-                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : 'bg-slate-50 text-slate-600 border-slate-200'
                             }`}
                         >
                           ₹{feesAmount.toLocaleString('en-IN')}

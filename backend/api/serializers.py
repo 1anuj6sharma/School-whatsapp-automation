@@ -156,6 +156,17 @@ class TemplateCreateMetaSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
 
 
+class TemplateUpdateMetaSerializer(serializers.Serializer):
+    category = serializers.ChoiceField(choices=["UTILITY", "MARKETING", "AUTHENTICATION"], required=False)
+    header_type = serializers.CharField(required=False, default="NONE")
+    header_text = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    sample_image_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    body_text = serializers.CharField(required=False)
+    sample_values = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    variable_mappings = serializers.DictField(required=False)
+    description = serializers.CharField(required=False, allow_blank=True)
+
+
 class MessageLogSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source="student.student_name", read_only=True, default=None)
 

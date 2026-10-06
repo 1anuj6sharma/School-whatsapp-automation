@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
   FileCode,
   AlertTriangle,
+  AlertCircle,
   CheckCircle2,
   Info,
   ArrowRight,
@@ -14,6 +15,8 @@ import {
   Eye,
   HelpCircle,
   Trash2,
+  Edit3,
+  Send,
   Image as ImageIcon,
   Upload,
   Layers,
@@ -43,6 +46,20 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
   const [bodyText, setBodyText] = useState('');
   const [sampleValues, setSampleValues] = useState({});
   const [variableMappings, setVariableMappings] = useState({});
+
+  // Edit Template Form State
+  const [editingTemplate, setEditingTemplate] = useState(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+  const [editCategory, setEditCategory] = useState('UTILITY');
+  const [editHeaderType, setEditHeaderType] = useState('NONE');
+  const [editHeaderText, setEditHeaderText] = useState('');
+  const [editSampleImageUrl, setEditSampleImageUrl] = useState('');
+  const [editLocalPreviewUrl, setEditLocalPreviewUrl] = useState('');
+  const [editImageUploading, setEditImageUploading] = useState(false);
+  const [editBodyText, setEditBodyText] = useState('');
+  const [editSampleValues, setEditSampleValues] = useState({});
+  const [editVariableMappings, setEditVariableMappings] = useState({});
 
   const pollingRef = useRef(null);
 
@@ -268,6 +285,189 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
       }
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Edit Detected Variables
+  const editDetectedVariables = React.useMemo(() => {
+    const matches = editBodyText.match(/\{\{(\d+)\}\}/g) || [];
+    const unique = Array.from(new Set(matches.map((m) => m.replace(/[{}]/g, ''))));
+    return unique.sort((a, b) => Number(a) - Number(b));
+  }, [editBodyText]);
+
+  const handleEditInsertVariable = () => {
+    const nextNum = editDetectedVariables.length + 1;
+    setEditBodyText((prev) => `${prev} {{${nextNum}}}`);
+  };
+
+  const handleEditSelectTagForVariable = (varNum, tag) => {
+    setEditVariableMappings((prev) => ({ ...prev, [varNum]: tag }));
+    if (!editSampleValues[varNum] || editSampleValues[varNum].startsWith('Sample')) {
+      let sample = `Sample ${varNum}`;
+      if (tag.includes('Student')) sample = 'Rahul Sharma';
+      else if (tag.includes('Parent')) sample = 'Rajesh Sharma';
+      else if (tag.includes('Fee') || tag.includes('due') || tag.includes('amount')) sample = '₹4,500';
+      else if (tag.includes('Class')) sample = 'Class 10-A';
+      setEditSampleValues((prev) => ({ ...prev, [varNum]: sample }));
+    }
+  };
+
+  const handleEditFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const objectUrl = URL.createObjectURL(file);
+      setEditLocalPreviewUrl(objectUrl);
+    } catch (_) { }
+
+    setEditImageUploading(true);
+    try {
+      const res = await api.uploadMedia(file);
+      if (res.url) {
+        setEditSampleImageUrl(res.url);
+        if (showToast) {
+          showToast({
+            type: 'success',
+            title: 'Sample Image Uploaded',
+            message: 'Image hosted and attached to template sample.',
+          });
+        }
+      }
+    } catch (err) {
+      if (showToast) {
+        showToast({
+          type: 'error',
+          title: 'Image Upload Failed',
+          message: err instanceof Error ? err.message : 'Could not upload image.',
+        });
+      }
+    } finally {
+      setEditImageUploading(false);
+    }
+  };
+
+  const handleOpenEdit = (tpl) => {
+    setEditingTemplate(tpl);
+    setEditCategory(tpl.category || 'UTILITY');
+    setEditHeaderType(tpl.header_type || 'NONE');
+    setEditHeaderText(tpl.header_text || '');
+    setEditSampleImageUrl(tpl.sample_image_url || '');
+    setEditLocalPreviewUrl('');
+    setEditBodyText(tpl.body_preview || '');
+    setEditVariableMappings(tpl.variable_mappings || {});
+
+    const matches = (tpl.body_preview || '').match(/\{\{(\d+)\}\}/g) || [];
+    const unique = Array.from(new Set(matches.map((m) => m.replace(/[{}]/g, ''))));
+    const samples = {};
+    unique.forEach((v) => {
+      const tag = (tpl.variable_mappings && tpl.variable_mappings[v]) || '';
+      let sample = `Sample ${v}`;
+      if (tag.includes('Student')) sample = 'Rahul Sharma';
+      else if (tag.includes('Parent')) sample = 'Rajesh Sharma';
+      else if (tag.includes('Fee') || tag.includes('due') || tag.includes('amount')) sample = '₹4,500';
+      else if (tag.includes('Class')) sample = 'Class 10-A';
+      samples[v] = sample;
+    });
+    setEditSampleValues(samples);
+    setShowEditModal(true);
+  };
+
+  const getEditPreviewText = () => {
+    if (!editBodyText.trim()) return 'Your message template text will appear here...';
+    let preview = editBodyText;
+    editDetectedVariables.forEach((num) => {
+      const sample = editSampleValues[num] || `[Sample ${num}]`;
+      preview = preview.replaceAll(`{{${num}}}`, sample);
+    });
+    return preview;
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    if (!editingTemplate) return;
+    if (!editBodyText.trim()) {
+      if (showToast) showToast({ type: 'warning', title: 'Please enter body text' });
+      return;
+    }
+    if (editHeaderType === 'TEXT' && !editHeaderText.trim()) {
+      if (showToast) showToast({ type: 'warning', title: 'Please enter Header Text' });
+      return;
+    }
+    for (const v of editDetectedVariables) {
+      if (!editSampleValues[v] || !editSampleValues[v].trim()) {
+        if (showToast) {
+          showToast({
+            type: 'warning',
+            title: 'Sample Value Required',
+            message: `Meta requires a sample value for placeholder {{${v}}}.`,
+          });
+        }
+        return;
+      }
+    }
+
+    const orderedSamples = editDetectedVariables.map((v) => editSampleValues[v].trim());
+
+    setIsSubmittingEdit(true);
+    try {
+      await api.updateTemplate(editingTemplate.id, {
+        category: editCategory,
+        header_type: editHeaderType,
+        header_text: editHeaderType === 'TEXT' ? editHeaderText.trim() : null,
+        sample_image_url: editHeaderType === 'IMAGE' ? editSampleImageUrl.trim() : null,
+        body_text: editBodyText.trim(),
+        sample_values: orderedSamples,
+        variable_mappings: editVariableMappings,
+        description: `Updated on ${new Date().toLocaleDateString()}` + (editHeaderType === 'IMAGE' ? ' [Image Header]' : ''),
+      });
+
+      if (showToast) {
+        showToast({
+          type: 'success',
+          title: 'Template Updated & Resubmitted',
+          message: `Template '${editingTemplate.name}' updated on Meta. Status is now PENDING review.`,
+        });
+      }
+
+      setShowEditModal(false);
+      setEditingTemplate(null);
+      await fetchTemplates(true);
+    } catch (err) {
+      if (showToast) {
+        showToast({
+          type: 'error',
+          title: 'Meta Template Update Failed',
+          message: err instanceof Error ? err.message : 'Error updating template on Meta.',
+        });
+      }
+    } finally {
+      setIsSubmittingEdit(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (tpl) => {
+    if (!window.confirm(`Are you sure you want to delete template '${tpl.name}'? This will also remove it from Meta.`)) {
+      return;
+    }
+    try {
+      await api.deleteTemplate(tpl.id);
+      if (showToast) {
+        showToast({
+          type: 'success',
+          title: 'Template Deleted',
+          message: `Template '${tpl.name}' has been deleted.`,
+        });
+      }
+      await fetchTemplates(true);
+    } catch (err) {
+      if (showToast) {
+        showToast({
+          type: 'error',
+          title: 'Delete Failed',
+          message: err instanceof Error ? err.message : 'Could not delete template.',
+        });
+      }
     }
   };
 
@@ -559,30 +759,67 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
                   </div>
                 </div>
 
-                <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="text-[11px] text-slate-500 font-mono">Language: {tpl.language}</span>
+                <div className="pt-4 mt-4 border-t border-slate-100 space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-slate-500 font-mono">Language: {tpl.language}</span>
 
-                  {isActive ? (
-                    <span className="flex items-center gap-1.5 font-bold text-emerald-700">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Ready for Broadcast</span>
-                    </span>
-                  ) : isPending ? (
-                    <span className="flex items-center gap-1.5 font-bold text-amber-700 animate-pulse">
-                      <Clock className="w-4 h-4" />
-                      <span>In Review with Meta</span>
-                    </span>
-                  ) : isRejected ? (
-                    <span className="flex items-center gap-1.5 font-bold text-rose-700">
-                      <XCircle className="w-4 h-4" />
-                      <span>Rejected by Meta</span>
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1.5 font-semibold text-slate-600">
-                      <AlertTriangle className="w-4 h-4" />
-                      <span>{tpl.status}</span>
-                    </span>
-                  )}
+                    {isActive ? (
+                      <span className="flex items-center gap-1.5 font-bold text-emerald-700">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Ready for Broadcast</span>
+                      </span>
+                    ) : isPending ? (
+                      <span className="flex items-center gap-1.5 font-bold text-amber-700 animate-pulse">
+                        <Clock className="w-4 h-4" />
+                        <span>In Review with Meta</span>
+                      </span>
+                    ) : isRejected ? (
+                      <span className="flex items-center gap-1.5 font-bold text-rose-700">
+                        <XCircle className="w-4 h-4" />
+                        <span>Rejected by Meta</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 font-semibold text-slate-600">
+                        <AlertTriangle className="w-4 h-4" />
+                        <span>{tpl.status}</span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEdit(tpl)}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 hover:text-slate-900 transition-colors shadow-2xs"
+                        title="Edit Template text and variables on Meta"
+                      >
+                        <Edit3 className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Edit Template</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteTemplate(tpl)}
+                        className="inline-flex items-center justify-center p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                        title="Delete template from Meta and database"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {isActive && onNavigateToSend && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateToSend(tpl.name)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-colors shadow-2xs"
+                      >
+                        <span>Use for Broadcast</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -939,6 +1176,338 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
           </div>
         </form>
       </Modal>
+
+      {/* Modal: Edit Existing Template on Meta */}
+      <Modal
+        isOpen={showEditModal}
+        onClose={() => {
+          setShowEditModal(false);
+          setEditingTemplate(null);
+        }}
+        title={`Edit Template: ${editingTemplate?.name || ''}`}
+      >
+        <form onSubmit={handleEditSubmit} className="space-y-5 text-slate-900">
+          {/* Meta Policy Alert Banner */}
+          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-amber-950">Meta Cloud API Template Edit Rules:</p>
+              <p className="text-[11px] leading-relaxed text-amber-800">
+                • Saving changes will submit the revised content to <strong>Meta for re-review</strong> (status transitions to <strong>PENDING</strong>).<br />
+                • Meta allows editing an approved template <strong>once per 24 hours</strong>.<br />
+                • Broadcasts can continue to be sent without interruption using the current approved version while the new version is under review.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Template Name (Permanent Identifier) */}
+            <div className="sm:col-span-1 space-y-1.5">
+              <label className="text-xs font-bold text-slate-900">
+                Template Name
+              </label>
+              <input
+                type="text"
+                disabled
+                value={editingTemplate?.name || ''}
+                className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono text-slate-500 cursor-not-allowed shadow-2xs"
+              />
+              <span className="text-[10px] text-slate-400 block">
+                Meta identifier (cannot be renamed).
+              </span>
+            </div>
+
+            {/* Category */}
+            <div className="sm:col-span-1 space-y-1.5">
+              <label className="text-xs font-bold text-slate-900">
+                Category <span className="text-rose-600">*</span>
+              </label>
+              <select
+                value={editCategory}
+                onChange={(e) => setEditCategory(e.target.value)}
+                className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-xs"
+              >
+                <option value="UTILITY">UTILITY (Notices, Fees, Attendance)</option>
+                <option value="MARKETING">MARKETING (Admissions, Events, Photos)</option>
+                <option value="AUTHENTICATION">AUTHENTICATION (OTP, Verification)</option>
+              </select>
+            </div>
+
+            {/* Language (Fixed per template locale) */}
+            <div className="sm:col-span-1 space-y-1.5">
+              <label className="text-xs font-bold text-slate-900">
+                Language
+              </label>
+              <input
+                type="text"
+                disabled
+                value={editingTemplate?.language || 'en_US'}
+                className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-500 cursor-not-allowed shadow-2xs"
+              />
+              <span className="text-[10px] text-slate-400 block">
+                Template language locale.
+              </span>
+            </div>
+          </div>
+
+          {/* Header Type Selection */}
+          <div className="space-y-2 p-3.5 bg-slate-50/80 rounded-xl border border-slate-200/80">
+            <label className="text-xs font-bold text-slate-900 block">
+              Header Format (Optional)
+            </label>
+            <div className="flex gap-4">
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="editHeaderType"
+                  value="NONE"
+                  checked={editHeaderType === 'NONE'}
+                  onChange={() => setEditHeaderType('NONE')}
+                  className="text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>None (Text Only)</span>
+              </label>
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="editHeaderType"
+                  value="TEXT"
+                  checked={editHeaderType === 'TEXT'}
+                  onChange={() => setEditHeaderType('TEXT')}
+                  className="text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Text Header</span>
+              </label>
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="editHeaderType"
+                  value="IMAGE"
+                  checked={editHeaderType === 'IMAGE'}
+                  onChange={() => setEditHeaderType('IMAGE')}
+                  className="text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Image Header</span>
+              </label>
+            </div>
+
+            {editHeaderType === 'TEXT' && (
+              <div className="pt-2 space-y-1">
+                <label className="text-xs font-bold text-slate-800">
+                  Header Text <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editHeaderText}
+                  onChange={(e) => setEditHeaderText(e.target.value)}
+                  placeholder="e.g. Fee Reminder / School Announcement"
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+                />
+              </div>
+            )}
+
+            {editHeaderType === 'IMAGE' && (
+              <div className="pt-2 space-y-2">
+                <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                  <span>Sample Image for Meta Review</span>
+                  {editImageUploading && <span className="text-[10px] text-purple-600 font-normal animate-pulse">Uploading sample image...</span>}
+                </label>
+
+                <div className="flex items-center gap-3">
+                  <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 bg-purple-50 text-purple-700 border border-purple-200 rounded-xl text-xs font-bold hover:bg-purple-100 transition-colors shadow-2xs">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{editSampleImageUrl ? 'Change Sample Image' : 'Upload Sample Image'}</span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png"
+                      className="hidden"
+                      onChange={handleEditFileUpload}
+                    />
+                  </label>
+
+                  {editSampleImageUrl && (
+                    <span className="text-[11px] text-emerald-600 font-medium flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Attached
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Body Message Text */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-900">
+                Body Message Text <span className="text-rose-600">*</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleEditInsertVariable}
+                className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold hover:bg-emerald-100 transition-colors shadow-2xs"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Insert Variable Placeholder</span>
+              </button>
+            </div>
+
+            <textarea
+              rows={5}
+              required
+              value={editBodyText}
+              onChange={(e) => setEditBodyText(e.target.value)}
+              placeholder="Dear Parent, your child {{1}} has pending fee of {{2}} due on {{3}}."
+              className="w-full bg-white border border-slate-300 rounded-xl p-3 text-xs text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 leading-relaxed shadow-xs"
+            />
+          </div>
+
+          {/* Dynamic Placeholder Mappings & Sample Values */}
+          {editDetectedVariables.length > 0 && (
+            <div className="space-y-3 p-4 rounded-xl bg-slate-50 border border-slate-200">
+              <div className="space-y-1">
+                <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Configure Variable Mappings &amp; Meta Review Samples</span>
+                </span>
+                <p className="text-[11px] text-slate-500">
+                  Select which database field maps to each placeholder, and provide realistic sample text for Meta&apos;s review.
+                </p>
+              </div>
+
+              <div className="space-y-3 pt-2 border-t border-slate-200">
+                {editDetectedVariables.map((v) => (
+                  <div
+                    key={v}
+                    className="p-3 bg-white rounded-xl border border-slate-200 space-y-2 shadow-2xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-xs font-mono font-bold border border-emerald-200">
+                        {`{{${v}}}`} Placeholder
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-medium">Mapped to database column</span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {[
+                        { label: 'Student Name', tag: 'student_name' },
+                        { label: 'Parent Name', tag: 'parent_name' },
+                        { label: 'Class', tag: 'class_name' },
+                        { label: 'Fees Due', tag: 'fees_due' },
+                        { label: 'Due Date', tag: 'due_date' },
+                        { label: 'Attendance', tag: 'attendance' },
+                        { label: 'School Name', tag: 'school_name' },
+                        { label: 'Remarks', tag: 'remarks' },
+                      ].map((chip) => (
+                        <button
+                          key={chip.tag}
+                          type="button"
+                          onClick={() => handleEditSelectTagForVariable(v, chip.tag)}
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-all ${
+                            editVariableMappings[v] === chip.tag
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="pt-2">
+                      <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                        Meta Sample Value for Review <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Rahul Sharma or ₹4,500"
+                        value={editSampleValues[v] || ''}
+                        onChange={(e) =>
+                          setEditSampleValues((prev) => ({ ...prev, [v]: e.target.value }))
+                        }
+                        className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-emerald-600 shadow-2xs"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Live Bubble Preview */}
+          <div className="space-y-1.5">
+            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <Eye className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Live Message Preview</span>
+            </span>
+            <div className="rounded-xl whatsapp-chat-bg border border-slate-300 p-3 shadow-xs">
+              <div className="whatsapp-bubble-received p-3 text-slate-900 text-xs whitespace-pre-wrap leading-relaxed shadow-xs border border-slate-200/50 space-y-2">
+                {editHeaderType === 'IMAGE' && (
+                  <div className="w-full h-36 rounded-xl bg-gradient-to-br from-purple-50 to-slate-100 border border-purple-200 flex flex-col items-center justify-center text-slate-400 gap-1.5 overflow-hidden relative shadow-inner">
+                    {(editLocalPreviewUrl || editSampleImageUrl) ? (
+                      <img
+                        src={editLocalPreviewUrl || editSampleImageUrl}
+                        alt="Preview"
+                        className="w-full h-full object-cover rounded-xl"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center gap-1.5 text-purple-700 py-4 px-3 text-center">
+                        <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 shadow-xs">
+                          <ImageIcon className="w-5 h-5" />
+                        </div>
+                        <span className="text-xs font-bold text-purple-900">Image Header Template</span>
+                        <span className="text-[10px] text-purple-600 font-medium">
+                          Upload image above to preview
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {editHeaderType === 'TEXT' && editHeaderText && (
+                  <p className="font-bold text-slate-900 text-xs border-b border-slate-200 pb-1">{editHeaderText}</p>
+                )}
+                <div>{getEditPreviewText()}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Form CTA */}
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => {
+                setShowEditModal(false);
+                setEditingTemplate(null);
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmittingEdit}
+              className="flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm transition-all active:scale-95 disabled:opacity-50"
+            >
+              {isSubmittingEdit ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Updating on Meta...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Save &amp; Submit to Meta</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 };
+

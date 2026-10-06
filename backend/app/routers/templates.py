@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.models.template import MessageTemplate
-from app.schemas.templates import TemplateCreateMetaRequest, TemplateResponse
+from app.schemas.templates import TemplateCreateMetaRequest, TemplateUpdateMetaRequest, TemplateResponse
 from app.services.whatsapp_service import whatsapp_service
 from app.utils.logger import logger
 
@@ -125,6 +125,59 @@ async def create_template_direct(payload: TemplateCreateMetaRequest, db: AsyncSe
     await db.refresh(template)
 
     logger.info(f"[Templates] Template '{template.name}' saved to DB with status: {template.status}")
+    return template
+
+@router.patch("/{template_id}", response_model=TemplateResponse)
+@router.put("/{template_id}", response_model=TemplateResponse)
+async def update_template_direct(
+    template_id: int,
+    payload: TemplateUpdateMetaRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Modifies an existing template on Meta WhatsApp Business Account and updates local database.
+    """
+    template = await db.get(MessageTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    # If updating Meta components
+    if payload.body_text or payload.header_type or payload.category or payload.header_text or payload.sample_image_url or payload.sample_values:
+        body_text = payload.body_text if payload.body_text is not None else (template.body_preview or "")
+        category = payload.category if payload.category is not None else template.category
+        header_type = payload.header_type if payload.header_type is not None else (template.header_type or "NONE")
+        header_text = payload.header_text if payload.header_text is not None else template.header_text
+        sample_image_url = payload.sample_image_url if payload.sample_image_url is not None else template.sample_image_url
+        sample_values = payload.sample_values or []
+
+        try:
+            meta_result = await whatsapp_service.edit_template_on_meta(
+                template_name=template.name,
+                body_text=body_text,
+                category=category,
+                header_type=header_type,
+                header_text=header_text,
+                sample_image_url=sample_image_url,
+                sample_values=sample_values
+            )
+        except ValueError as val_err:
+            raise HTTPException(status_code=400, detail=str(val_err))
+        except Exception as ex:
+            raise HTTPException(status_code=502, detail=f"Failed to update template on Meta: {str(ex)}")
+
+        template.body_preview = meta_result.get("body_preview", body_text)
+        template.header_type = meta_result.get("header_type", header_type)
+        template.header_text = meta_result.get("header_text", header_text)
+        template.sample_image_url = meta_result.get("sample_image_url", sample_image_url)
+        if meta_result.get("category"):
+            template.category = meta_result["category"]
+        template.status = meta_result.get("status", "PENDING")
+
+    if payload.description is not None:
+        template.description = payload.description
+
+    await db.commit()
+    await db.refresh(template)
     return template
 
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)

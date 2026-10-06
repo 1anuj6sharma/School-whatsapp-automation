@@ -33,6 +33,15 @@ class TemplateUpdate(BaseModel):
     body_preview: Optional[str] = None
     status: Optional[str] = None
 
+class TemplateUpdateMetaRequest(BaseModel):
+    category: Optional[str] = Field(default=None, description="UTILITY or MARKETING")
+    body_text: Optional[str] = Field(default=None, description="Updated body message text")
+    header_type: Optional[str] = Field(default="NONE", description="NONE, TEXT, or IMAGE")
+    header_text: Optional[str] = Field(default=None, description="Optional text for header if header_type is TEXT")
+    sample_image_url: Optional[str] = Field(default=None, description="Sample image URL for IMAGE header")
+    sample_values: Optional[List[str]] = Field(default=None, description="Sample values for {{1}}, {{2}} placeholders")
+    description: Optional[str] = Field(default=None, description="Local template description")
+
 class TemplateResponse(TemplateBase):
     id: int
     created_at: datetime

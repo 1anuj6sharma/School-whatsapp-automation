@@ -24,6 +24,7 @@ from .serializers import (
     StudentUpdateSerializer,
     TemplateSerializer,
     TemplateCreateMetaSerializer,
+    TemplateUpdateMetaSerializer,
     CampaignSerializer,
     CampaignDetailSerializer,
     CampaignCreateSerializer,
@@ -500,11 +501,61 @@ class TemplateDetailView(APIView):
         except MessageTemplate.DoesNotExist:
             return Response({"detail": "Template not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        # Check if request has Meta component updates (body_text, header_type, header_text, sample_image_url, category, sample_values)
+        meta_keys = {"body_text", "header_type", "header_text", "sample_image_url", "category", "sample_values"}
+        has_meta_changes = bool(meta_keys.intersection(request.data.keys()))
+
+        if has_meta_changes:
+            serializer = TemplateUpdateMetaSerializer(data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            data = serializer.validated_data
+
+            body_text = data.get("body_text", template.body_preview or "")
+            category = data.get("category", template.category)
+            header_type = data.get("header_type", template.header_type or "NONE")
+            header_text = data.get("header_text", template.header_text)
+            sample_image_url = data.get("sample_image_url", template.sample_image_url)
+            sample_values = data.get("sample_values", [])
+
+            try:
+                meta_result = asyncio.run(
+                    whatsapp_service.edit_template_on_meta(
+                        template_name=template.name,
+                        body_text=body_text,
+                        category=category,
+                        header_type=header_type,
+                        header_text=header_text,
+                        sample_image_url=sample_image_url,
+                        sample_values=sample_values,
+                    )
+                )
+            except ValueError as val_err:
+                return Response({"detail": str(val_err)}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as ex:
+                return Response(
+                    {"detail": f"Failed to update template on Meta: {str(ex)}"},
+                    status=status.HTTP_502_BAD_GATEWAY
+                )
+
+            template.body_preview = meta_result.get("body_preview", body_text)
+            template.header_type = meta_result.get("header_type", header_type)
+            template.header_text = meta_result.get("header_text", header_text)
+            template.sample_image_url = meta_result.get("sample_image_url", sample_image_url)
+            if meta_result.get("category"):
+                template.category = meta_result["category"]
+            template.status = meta_result.get("status", "PENDING")
+
+        # Local variable mappings or description updates
         if "variable_mappings" in request.data:
             template.variable_mappings = request.data["variable_mappings"]
-            template.save(update_fields=["variable_mappings", "updated_at"])
+        if "description" in request.data:
+            template.description = request.data["description"]
 
+        template.save()
         return Response(TemplateSerializer(template).data)
+
+    def put(self, request, pk):
+        return self.patch(request, pk)
 
     def delete(self, request, pk):
         try:

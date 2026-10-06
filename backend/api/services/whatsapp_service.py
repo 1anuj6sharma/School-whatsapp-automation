@@ -769,6 +769,166 @@ class WhatsAppService:
                 logger.error(f"[WhatsAppService] Exception creating template on Meta: {str(ex)}")
                 raise RuntimeError(f"Failed to communicate with Meta API: {str(ex)}")
 
+    async def get_meta_template_id_by_name(self, template_name: str) -> Optional[str]:
+        """
+        Looks up the Meta template ID by template name directly from Meta WABA.
+        """
+        waba_id = self.get_waba_id()
+        token = self.get_access_token()
+        url = f"https://graph.facebook.com/{self.api_version}/{waba_id}/message_templates"
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"name": template_name.strip()}
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                response = await client.get(url, headers=headers, params=params)
+                data = response.json()
+                items = data.get("data", [])
+                if items and isinstance(items, list):
+                    return items[0].get("id")
+            except Exception as ex:
+                logger.warning(f"[WhatsAppService] Could not lookup Meta ID for '{template_name}': {ex}")
+        return None
+
+    async def edit_template_on_meta(
+        self,
+        template_name: str,
+        body_text: str,
+        category: Optional[str] = None,
+        header_type: Optional[str] = "NONE",
+        header_text: Optional[str] = None,
+        sample_image_url: Optional[str] = None,
+        sample_values: Optional[List[str]] = None,
+        meta_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Edits an existing approved or pending message template directly on Meta WhatsApp Cloud API.
+        Endpoint: POST https://graph.facebook.com/{version}/{TEMPLATE_ID}
+        """
+        target_meta_id = meta_id
+        if not target_meta_id:
+            target_meta_id = await self.get_meta_template_id_by_name(template_name)
+
+        if not target_meta_id:
+            raise ValueError(
+                f"Could not locate Meta Template ID for '{template_name}'. "
+                f"Please ensure the template exists in your Meta WhatsApp Manager or sync first."
+            )
+
+        token = self.get_access_token()
+        url = f"https://graph.facebook.com/{self.api_version}/{target_meta_id}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
+        norm_header_type = (header_type or "NONE").upper().strip()
+        components_list: List[Dict[str, Any]] = []
+
+        # Optional Header Component
+        if norm_header_type == "IMAGE":
+            header_comp: Dict[str, Any] = {
+                "type": "HEADER",
+                "format": "IMAGE"
+            }
+            sample_handle = None
+            if sample_image_url and sample_image_url.strip():
+                val = sample_image_url.strip()
+                if val.startswith("4:") or len(val) > 100:
+                    sample_handle = val
+                else:
+                    img_bytes = None
+                    mime_type = "image/jpeg"
+                    if val.startswith("/media/") or val.startswith("media/"):
+                        rel_path = val.lstrip("/")
+                        local_path = os.path.join(settings.BASE_DIR, rel_path)
+                        if os.path.exists(local_path):
+                            try:
+                                with open(local_path, "rb") as f:
+                                    img_bytes = f.read()
+                                if val.endswith(".png"):
+                                    mime_type = "image/png"
+                            except Exception as e:
+                                logger.warning(f"[WhatsAppService] Could not read local sample image {local_path}: {e}")
+                    elif val.startswith("http://") or val.startswith("https://"):
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as dl_client:
+                                dl_res = await dl_client.get(val)
+                                if dl_res.status_code == 200:
+                                    img_bytes = dl_res.content
+                                    mime_type = dl_res.headers.get("content-type", "image/jpeg")
+                        except Exception as e:
+                            logger.warning(f"[WhatsAppService] Could not download sample image from {val}: {e}")
+
+                    if img_bytes:
+                        sample_handle = await self.upload_sample_media_handle(img_bytes, mime_type=mime_type)
+
+            if sample_handle:
+                header_comp["example"] = {"header_handle": [sample_handle]}
+            components_list.append(header_comp)
+
+        elif norm_header_type == "TEXT" and header_text and header_text.strip():
+            components_list.append({
+                "type": "HEADER",
+                "format": "TEXT",
+                "text": header_text.strip(),
+            })
+
+        # Body Component
+        body_component: Dict[str, Any] = {
+            "type": "BODY",
+            "text": body_text.strip(),
+        }
+
+        placeholders = re.findall(r"\{\{(\d+)\}\}", body_text)
+        if placeholders:
+            if not sample_values or len(sample_values) < len(placeholders):
+                sample_values = [f"Sample_{i}" for i in range(1, len(placeholders) + 1)]
+            body_component["example"] = {"body_text": [sample_values]}
+
+        components_list.append(body_component)
+
+        payload: Dict[str, Any] = {
+            "components": components_list
+        }
+        if category and category.strip():
+            payload["category"] = category.upper().strip()
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                logger.info(f"[WhatsAppService] Modifying template '{template_name}' (ID: {target_meta_id}) on Meta.")
+                response = await client.post(url, headers=headers, json=payload)
+                data = response.json()
+
+                if response.status_code not in (200, 201):
+                    error_data = data.get("error", {})
+                    error_user_msg = error_data.get("error_user_msg")
+                    error_user_title = error_data.get("error_user_title")
+                    details = error_data.get("error_data", {}).get("details")
+                    msg = error_data.get("message", f"Meta error {response.status_code}")
+
+                    full_error = f"{error_user_title}: {error_user_msg}" if (error_user_title and error_user_msg) else (error_user_msg or details or msg)
+                    logger.error(f"[WhatsAppService] Meta rejected template update. Response: {data}")
+                    raise ValueError(full_error)
+
+                logger.info(f"[WhatsAppService] Template '{template_name}' updated on Meta successfully.")
+                return {
+                    "success": True,
+                    "meta_id": target_meta_id,
+                    "name": template_name,
+                    "status": "PENDING",  # Meta resets edited templates to review
+                    "category": category.upper().strip() if category else None,
+                    "header_type": norm_header_type,
+                    "header_text": header_text.strip() if norm_header_type == "TEXT" and header_text else None,
+                    "sample_image_url": sample_image_url.strip() if norm_header_type == "IMAGE" and sample_image_url else None,
+                    "body_preview": body_text.strip()
+                }
+            except ValueError:
+                raise
+            except Exception as ex:
+                logger.error(f"[WhatsAppService] Exception updating template on Meta: {str(ex)}")
+                raise RuntimeError(f"Failed to communicate with Meta API: {str(ex)}")
+
     async def delete_template_on_meta(self, template_name: str) -> bool:
         waba_id = self.get_waba_id()
         token = self.get_access_token()

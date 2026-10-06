@@ -218,15 +218,17 @@ export function App() {
             <CampaignsPage
               onNavigateToDetail={(id) => handleNavigate('campaign-detail', id)}
               onNavigateToSend={() => setActiveTab('send-message')}
+              showToast={addToast}
             />
           )}
           {activeTab === 'campaign-detail' && selectedCampaignId && (
             <CampaignDetailPage
               campaignId={selectedCampaignId}
               onBack={() => setActiveTab('campaigns')}
+              showToast={addToast}
             />
           )}
-          {activeTab === 'logs' && <MessageLogsPage />}
+          {activeTab === 'logs' && <MessageLogsPage showToast={addToast} />}
           {activeTab === 'settings' && <SettingsPage showToast={addToast} />}
         </main>
       </div>

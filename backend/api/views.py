@@ -9,6 +9,7 @@ from django.conf import settings
 from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -37,6 +38,7 @@ from .services.whatsapp_service import whatsapp_service
 from .services.campaign_service import campaign_service
 from .utils.logger import logger
 from .utils.phone import sanitize_phone_number, validate_phone_number
+from .utils.template_infer import infer_template_variable_mappings
 
 
 class HealthCheckView(APIView):
@@ -392,6 +394,15 @@ class TemplateListCreateView(APIView):
                 meta_templates = asyncio.run(whatsapp_service.fetch_templates_from_meta())
                 for item in meta_templates:
                     name = item["name"]
+                    existing = MessageTemplate.objects.filter(name=name).first()
+                    var_map = existing.variable_mappings if existing and existing.variable_mappings else {}
+                    if not var_map:
+                        var_map = infer_template_variable_mappings(
+                            body_text=item.get("body_preview", ""),
+                            template_name=name,
+                            category=item.get("category", "")
+                        )
+
                     MessageTemplate.objects.update_or_create(
                         name=name,
                         defaults={
@@ -402,6 +413,7 @@ class TemplateListCreateView(APIView):
                             "description": item.get("description", f"Meta {item['category']} Template"),
                             "header_type": item.get("header_type", "NONE"),
                             "header_text": item.get("header_text"),
+                            "variable_mappings": var_map,
                         }
                     )
                 qs = MessageTemplate.objects.all().order_by("name")
@@ -445,6 +457,14 @@ class TemplateListCreateView(APIView):
         if tpl_status == "APPROVED":
             tpl_status = "ACTIVE"
 
+        var_mappings = data.get("variable_mappings", {})
+        if not var_mappings:
+            var_mappings = infer_template_variable_mappings(
+                body_text=meta_result.get("body_preview", data["body_text"]),
+                template_name=meta_result["name"],
+                category=meta_result["category"]
+            )
+
         template = MessageTemplate.objects.create(
             name=meta_result["name"],
             category=meta_result["category"],
@@ -455,7 +475,7 @@ class TemplateListCreateView(APIView):
             header_type=meta_result.get("header_type", data.get("header_type", "NONE")),
             header_text=meta_result.get("header_text", data.get("header_text")),
             sample_image_url=meta_result.get("sample_image_url", data.get("sample_image_url")),
-            variable_mappings=data.get("variable_mappings", {}),
+            variable_mappings=var_mappings,
         )
         return Response(TemplateSerializer(template).data, status=status.HTTP_201_CREATED)
 
@@ -473,6 +493,12 @@ class TemplateSyncView(APIView):
         for item in meta_templates:
             existing = MessageTemplate.objects.filter(name=item["name"]).first()
             var_map = existing.variable_mappings if existing and existing.variable_mappings else {}
+            if not var_map:
+                var_map = infer_template_variable_mappings(
+                    body_text=item.get("body_preview", ""),
+                    template_name=item["name"],
+                    category=item.get("category", "")
+                )
 
             MessageTemplate.objects.update_or_create(
                 name=item["name"],
@@ -658,6 +684,58 @@ class CampaignDetailView(APIView):
 
         return Response(CampaignDetailSerializer(campaign).data)
 
+    def delete(self, request, pk):
+        try:
+            campaign = MessageCampaign.objects.get(pk=pk)
+        except MessageCampaign.DoesNotExist:
+            return Response({"detail": "Campaign not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        campaign.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CampaignBulkDeleteView(APIView):
+    def post(self, request):
+        ids = request.data.get("ids", [])
+        from_date = request.data.get("from_date")
+        to_date = request.data.get("to_date")
+        before_date = request.data.get("before_date")
+
+        qs = MessageCampaign.objects.all()
+        matched = False
+
+        if ids and isinstance(ids, list) and len(ids) > 0:
+            qs = qs.filter(id__in=ids)
+            matched = True
+
+        if from_date:
+            parsed_from = parse_date(str(from_date).strip())
+            if parsed_from:
+                qs = qs.filter(created_at__date__gte=parsed_from)
+                matched = True
+
+        if to_date:
+            parsed_to = parse_date(str(to_date).strip())
+            if parsed_to:
+                qs = qs.filter(created_at__date__lte=parsed_to)
+                matched = True
+
+        if before_date:
+            parsed_before = parse_date(str(before_date).strip())
+            if parsed_before:
+                qs = qs.filter(created_at__date__lt=parsed_before)
+                matched = True
+
+        if not matched:
+            return Response(
+                {"detail": "Please provide campaign 'ids', a date range ('from_date' and 'to_date'), or 'before_date'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        count = qs.count()
+        qs.delete()
+        return Response({"deleted_count": count, "message": f"Successfully deleted {count} campaign(s)."}, status=status.HTTP_200_OK)
+
 
 class CampaignRetryView(APIView):
     def post(self, request, pk):
@@ -673,6 +751,9 @@ class MessageLogListView(APIView):
         campaign_id = request.query_params.get("campaign_id")
         student_id = request.query_params.get("student_id")
         status_filter = request.query_params.get("status")
+        from_date = request.query_params.get("from_date")
+        to_date = request.query_params.get("to_date")
+        before_date = request.query_params.get("before_date")
         limit = int(request.query_params.get("limit", 100))
         offset = int(request.query_params.get("offset", 0))
 
@@ -682,8 +763,20 @@ class MessageLogListView(APIView):
             qs = qs.filter(campaign_id=campaign_id)
         if student_id:
             qs = qs.filter(student_id=student_id)
-        if status_filter:
+        if status_filter and status_filter.upper() != "ALL":
             qs = qs.filter(status=status_filter.upper())
+        if from_date:
+            parsed_from = parse_date(str(from_date).strip())
+            if parsed_from:
+                qs = qs.filter(created_at__date__gte=parsed_from)
+        if to_date:
+            parsed_to = parse_date(str(to_date).strip())
+            if parsed_to:
+                qs = qs.filter(created_at__date__lte=parsed_to)
+        if before_date:
+            parsed_before = parse_date(str(before_date).strip())
+            if parsed_before:
+                qs = qs.filter(created_at__date__lt=parsed_before)
 
         logs = qs[offset : offset + limit]
         return Response(MessageLogSerializer(logs, many=True).data)
@@ -696,6 +789,69 @@ class MessageLogDetailView(APIView):
         except MessageLog.DoesNotExist:
             return Response({"detail": "Message log not found"}, status=status.HTTP_404_NOT_FOUND)
         return Response(MessageLogSerializer(log).data)
+
+    def delete(self, request, pk):
+        try:
+            log = MessageLog.objects.get(pk=pk)
+        except MessageLog.DoesNotExist:
+            return Response({"detail": "Message log not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        log.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MessageLogBulkDeleteView(APIView):
+    def post(self, request):
+        ids = request.data.get("ids", [])
+        from_date = request.data.get("from_date")
+        to_date = request.data.get("to_date")
+        before_date = request.data.get("before_date")
+        campaign_id = request.data.get("campaign_id")
+        status_filter = request.data.get("status")
+
+        qs = MessageLog.objects.all()
+        matched = False
+
+        if ids and isinstance(ids, list) and len(ids) > 0:
+            qs = qs.filter(id__in=ids)
+            matched = True
+
+        if from_date:
+            parsed_from = parse_date(str(from_date).strip())
+            if parsed_from:
+                qs = qs.filter(created_at__date__gte=parsed_from)
+                matched = True
+
+        if to_date:
+            parsed_to = parse_date(str(to_date).strip())
+            if parsed_to:
+                qs = qs.filter(created_at__date__lte=parsed_to)
+                matched = True
+
+        if before_date:
+            parsed_before = parse_date(str(before_date).strip())
+            if parsed_before:
+                qs = qs.filter(created_at__date__lt=parsed_before)
+                matched = True
+
+        if campaign_id:
+            qs = qs.filter(campaign_id=campaign_id)
+            matched = True
+
+        if status_filter and status_filter.upper() != "ALL":
+            qs = qs.filter(status=status_filter.upper())
+            matched = True
+
+        if not matched:
+            return Response(
+                {"detail": "Please provide message log 'ids', date filters ('from_date', 'to_date', 'before_date'), or 'campaign_id'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        count = qs.count()
+        qs.delete()
+        return Response({"deleted_count": count, "message": f"Successfully deleted {count} message log(s)."}, status=status.HTTP_200_OK)
+
 
 
 class TestMessageView(APIView):

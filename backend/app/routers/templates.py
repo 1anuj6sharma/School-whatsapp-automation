@@ -7,6 +7,7 @@ from app.models.template import MessageTemplate
 from app.schemas.templates import TemplateCreateMetaRequest, TemplateUpdateMetaRequest, TemplateResponse
 from app.services.whatsapp_service import whatsapp_service
 from app.utils.logger import logger
+from app.utils.template_infer import infer_template_variable_mappings
 
 router = APIRouter(prefix="/api/templates", tags=["Templates"])
 

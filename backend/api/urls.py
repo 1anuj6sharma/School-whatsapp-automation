@@ -11,8 +11,10 @@ from .views import (
     CampaignListCreateView,
     CampaignDetailView,
     CampaignRetryView,
+    CampaignBulkDeleteView,
     MessageLogListView,
     MessageLogDetailView,
+    MessageLogBulkDeleteView,
     TestMessageView,
     WhatsAppWebhookView,
     ConversationDetailView,
@@ -62,6 +64,8 @@ urlpatterns = [
     # Campaigns API
     path("api/campaigns", CampaignListCreateView.as_view(), name="campaign-list-create"),
     path("api/campaigns/", CampaignListCreateView.as_view(), name="campaign-list-create-slash"),
+    path("api/campaigns/bulk-delete", CampaignBulkDeleteView.as_view(), name="campaign-bulk-delete"),
+    path("api/campaigns/bulk-delete/", CampaignBulkDeleteView.as_view(), name="campaign-bulk-delete-slash"),
     path("api/campaigns/<int:pk>", CampaignDetailView.as_view(), name="campaign-detail"),
     path("api/campaigns/<int:pk>/", CampaignDetailView.as_view(), name="campaign-detail-slash"),
     path("api/campaigns/<int:pk>/retry-failed", CampaignRetryView.as_view(), name="campaign-retry"),
@@ -70,6 +74,8 @@ urlpatterns = [
     # Message Logs API
     path("api/message-logs", MessageLogListView.as_view(), name="log-list"),
     path("api/message-logs/", MessageLogListView.as_view(), name="log-list-slash"),
+    path("api/message-logs/bulk-delete", MessageLogBulkDeleteView.as_view(), name="log-bulk-delete"),
+    path("api/message-logs/bulk-delete/", MessageLogBulkDeleteView.as_view(), name="log-bulk-delete-slash"),
     path("api/message-logs/<int:pk>", MessageLogDetailView.as_view(), name="log-detail"),
     path("api/message-logs/<int:pk>/", MessageLogDetailView.as_view(), name="log-detail-slash"),
 

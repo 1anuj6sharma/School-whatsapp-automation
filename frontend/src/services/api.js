@@ -271,15 +271,50 @@ export const api = {
     return handleResponse(res);
   },
 
+  async deleteCampaign(id) {
+    const res = await fetch(`${API_BASE}/api/campaigns/${id}`, {
+      method: 'DELETE',
+    });
+    return handleResponse(res);
+  },
+
+  async bulkDeleteCampaigns(data) {
+    const res = await fetch(`${API_BASE}/api/campaigns/bulk-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
   // Message Logs
   async getMessageLogs(params) {
     const url = new URL(`${window.location.origin}/api/message-logs`);
     if (params?.campaign_id) url.searchParams.append('campaign_id', params.campaign_id.toString());
     if (params?.student_id) url.searchParams.append('student_id', params.student_id.toString());
     if (params?.status && params.status !== 'ALL') url.searchParams.append('status', params.status);
+    if (params?.from_date) url.searchParams.append('from_date', params.from_date);
+    if (params?.to_date) url.searchParams.append('to_date', params.to_date);
+    if (params?.before_date) url.searchParams.append('before_date', params.before_date);
     if (params?.limit) url.searchParams.append('limit', params.limit.toString());
 
     const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async deleteMessageLog(id) {
+    const res = await fetch(`${API_BASE}/api/message-logs/${id}`, {
+      method: 'DELETE',
+    });
+    return handleResponse(res);
+  },
+
+  async bulkDeleteMessageLogs(data) {
+    const res = await fetch(`${API_BASE}/api/message-logs/bulk-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
     return handleResponse(res);
   },
 

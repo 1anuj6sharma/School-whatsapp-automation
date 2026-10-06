@@ -27,11 +27,92 @@ import {
   Check,
   ChevronRight,
   Layers,
+  Save,
+  BookmarkCheck,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
 import { Modal } from '../components/Modal';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+
+// Smart auto-inferrer for template variables based on text context and school workflows
+const inferVariablesFromTemplate = (template) => {
+  if (!template || !template.body_preview) return {};
+  const body = template.body_preview;
+  const lowerBody = body.toLowerCase();
+  const lowerName = (template.name || '').toLowerCase();
+  const matches = body.match(/\{\{(\d+)\}\}/g) || [];
+  const uniqueNums = Array.from(new Set(matches.map((m) => m.replace(/[{}]/g, '')))).sort((a, b) => Number(a) - Number(b));
+
+  const isFeeContext = lowerName.includes('fee') || lowerName.includes('due') || lowerBody.includes('fee') || lowerBody.includes('due') || lowerBody.includes('amount') || lowerBody.includes('balance');
+  const isAttendanceContext = lowerName.includes('attendance') || lowerName.includes('absent') || lowerBody.includes('attendance') || lowerBody.includes('absent');
+
+  const result = {};
+  uniqueNums.forEach((num) => {
+    const placeholderStr = `{{${num}}}`;
+    const idx = lowerBody.indexOf(placeholderStr);
+    const startPos = Math.max(0, idx - 60);
+    const endPos = Math.min(lowerBody.length, idx + placeholderStr.length + 60);
+    const window = lowerBody.slice(startPos, endPos);
+    const windowBefore = lowerBody.slice(startPos, idx);
+
+    // 1. Fee / Amount
+    if (['fee', 'fees', 'amount', 'balance', '₹', 'rs', 'inr', 'rupees', 'payable', 'installment', 'dues'].some((k) => window.includes(k)) && !['due date', 'by date', 'last date', 'deadline'].some((k) => window.includes(k))) {
+      result[num] = '{Fees Due}';
+      return;
+    }
+    // 2. Due Date
+    if (['due date', 'by date', 'last date', 'deadline', 'pay by', 'valid till', 'on or before', 'before date'].some((k) => window.includes(k)) || ((window.includes('due on') || windowBefore.includes('by')) && isFeeContext)) {
+      result[num] = '{Due Date}';
+      return;
+    }
+    // 3. Attendance
+    if (['attendance', 'absent', 'present', 'marked'].some((k) => window.includes(k))) {
+      result[num] = '{Attendance}';
+      return;
+    }
+    // 4. Class / Grade
+    if (['class', 'grade', 'standard', 'sec', 'section', 'division'].some((k) => window.includes(k))) {
+      result[num] = '{Class Name}';
+      return;
+    }
+    // 5. Parent Name
+    if (['parent', 'guardian', 'father', 'mother', 'mr.', 'mrs.', 'shri', 'smt', 'dear parent'].some((k) => window.includes(k))) {
+      result[num] = '{Parent Name}';
+      return;
+    }
+    // 6. Student Name
+    if (['student', 'child', 'ward', 'kid', 'scholar', 'roll', 'dear student', 'name of'].some((k) => window.includes(k))) {
+      result[num] = '{Student Name}';
+      return;
+    }
+    // 7. School Name
+    if (['school', 'academy', 'institute', 'vidyalaya', 'institution', 'principal'].some((k) => window.includes(k))) {
+      result[num] = '{School Name}';
+      return;
+    }
+    // 8. Exam Name / Date
+    if (['exam', 'test', 'assessment'].some((k) => window.includes(k))) {
+      result[num] = ['date', 'schedule', 'on'].some((k) => window.includes(k)) ? '{Exam Date}' : '{Exam Name}';
+      return;
+    }
+
+    // Positional fallbacks
+    if (num === '1') {
+      result[num] = (lowerBody.includes('dear parent') || isFeeContext) ? '{Parent Name}' : '{Student Name}';
+    } else if (num === '2') {
+      result[num] = result['1'] === '{Parent Name}' ? '{Student Name}' : (isFeeContext ? '{Fees Due}' : '{Student Name}');
+    } else if (num === '3') {
+      result[num] = isFeeContext ? (result['2'] !== '{Fees Due}' ? '{Fees Due}' : '{Due Date}') : (isAttendanceContext ? '{Attendance}' : '{Class Name}');
+    } else if (num === '4') {
+      result[num] = '{Due Date}';
+    } else {
+      result[num] = `Value ${num}`;
+    }
+  });
+
+  return result;
+};
 
 // Helper function to filter templates strictly based on active workflow
 const filterTemplatesForWorkflow = (workflow, allTemplates) => {
@@ -367,6 +448,8 @@ export const SendMessagePage = ({
     return unique.sort((a, b) => Number(a) - Number(b));
   }, [selectedTemplate]);
 
+  const [isSavingMappings, setIsSavingMappings] = useState(false);
+
   // When selected template changes, set convenient defaults for variables & header image
   useEffect(() => {
     if (selectedTemplate?.sample_image_url) {
@@ -377,11 +460,11 @@ export const SendMessagePage = ({
 
     if (detectedVariables.length > 0) {
       const initialVars = {};
-      const tName = (selectedTemplate?.name || '').toLowerCase();
       const explicitMappings = selectedTemplate?.variable_mappings || {};
+      const inferredMappings = inferVariablesFromTemplate(selectedTemplate);
 
       detectedVariables.forEach((num) => {
-        // Priority 1: Explicit DB mapping saved during template creation
+        // Priority 1: Explicit DB mapping saved previously
         if (
           explicitMappings[num] !== undefined &&
           explicitMappings[num] !== null &&
@@ -389,22 +472,13 @@ export const SendMessagePage = ({
         ) {
           initialVars[num] = explicitMappings[num];
         }
-        // Priority 2: Intelligent heuristic rules based on workflow & template name
-        else if (activeWorkflow === 'FEES' || tName.includes('fee')) {
-          if (num === '1') initialVars[num] = '{Parent Name}';
-          else if (num === '2') initialVars[num] = '{Student Name}';
-          else if (num === '3') initialVars[num] = '{Fees Due}';
-          else initialVars[num] = `Value ${num}`;
-        } else if (tName === 'student_attendance') {
-          if (num === '1') initialVars[num] = '{Parent Name}';
-          else if (num === '2') initialVars[num] = '{Student Name}';
-          else if (num === '3') initialVars[num] = 'Present';
-          else if (num === '4') initialVars[num] = 'today';
-          else initialVars[num] = `Value ${num}`;
-        } else {
-          if (num === '1') initialVars[num] = '{Parent Name}';
-          else if (num === '2') initialVars[num] = '{Student Name}';
-          else initialVars[num] = '';
+        // Priority 2: Smart NLP Context & Keyword Inferrer
+        else if (inferredMappings[num]) {
+          initialVars[num] = inferredMappings[num];
+        }
+        // Fallback default
+        else {
+          initialVars[num] = num === '1' ? '{Parent Name}' : '{Student Name}';
         }
       });
       setTemplateVariables(initialVars);
@@ -412,6 +486,38 @@ export const SendMessagePage = ({
       setTemplateVariables({});
     }
   }, [selectedTemplateId, detectedVariables.length, activeWorkflow]);
+
+  const handleSaveDefaultMappings = async () => {
+    if (!selectedTemplate) return;
+    setIsSavingMappings(true);
+    try {
+      await api.updateTemplate(selectedTemplate.id, {
+        variable_mappings: templateVariables,
+      });
+      setTemplates((prev) =>
+        prev.map((t) =>
+          t.id === selectedTemplate.id ? { ...t, variable_mappings: templateVariables } : t
+        )
+      );
+      if (showToast) {
+        showToast({
+          type: 'success',
+          title: 'Template Variables Saved',
+          message: `Default mappings saved permanently for '${selectedTemplate.name}'.`,
+        });
+      }
+    } catch (err) {
+      if (showToast) {
+        showToast({
+          type: 'error',
+          title: 'Failed to save mappings',
+          message: err instanceof Error ? err.message : 'Could not save variable defaults.',
+        });
+      }
+    } finally {
+      setIsSavingMappings(false);
+    }
+  };
 
   const handleImageUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -708,6 +814,13 @@ export const SendMessagePage = ({
         header_image_url: headerImageUrl ? headerImageUrl.trim() : undefined,
       });
 
+      // Solution 4: Auto-save confirmed variable mappings to DB for this template
+      if (selectedTemplate && Object.keys(templateVariables).length > 0) {
+        api.updateTemplate(selectedTemplate.id, {
+          variable_mappings: templateVariables,
+        }).catch((e) => console.debug('Auto-save template mapping on broadcast send:', e));
+      }
+
       showToast({
         type: 'success',
         title: 'Broadcast Campaign Initiated!',
@@ -963,14 +1076,26 @@ export const SendMessagePage = ({
                     <Sliders className="w-4 h-4 text-emerald-600" />
                     <span>Dynamic Message Variables ({detectedVariables.length})</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleResetVariables}
-                    className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    <span>Clear</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isSavingMappings}
+                      onClick={handleSaveDefaultMappings}
+                      className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
+                      title="Save current variable mappings as the permanent defaults for this template"
+                    >
+                      <Save className="w-3 h-3 text-emerald-600" />
+                      <span>{isSavingMappings ? 'Saving...' : 'Save as Default'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetVariables}
+                      className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Clear</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">

@@ -242,6 +242,10 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
     }
 
     const orderedSamples = detectedVariables.map((v) => sampleValues[v].trim());
+    const finalMappings = {};
+    detectedVariables.forEach((v) => {
+      finalMappings[v] = variableMappings[v]?.trim() || `Value ${v}`;
+    });
 
     setIsSubmitting(true);
     try {
@@ -254,7 +258,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
         sample_image_url: headerType === 'IMAGE' ? sampleImageUrl.trim() : null,
         body_text: bodyText,
         sample_values: orderedSamples,
-        variable_mappings: variableMappings,
+        variable_mappings: finalMappings,
         description: `Created from School WhatsApp UI on ${new Date().toLocaleDateString()}` + (headerType === 'IMAGE' ? ' [Image Header]' : ''),
       });
 
@@ -301,7 +305,16 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
   };
 
   const handleEditSelectTagForVariable = (varNum, tag) => {
-    setEditVariableMappings((prev) => ({ ...prev, [varNum]: tag }));
+    setEditVariableMappings((prev) => {
+      const isAlreadySelected = prev[varNum] === tag;
+      const next = { ...prev };
+      if (isAlreadySelected) {
+        next[varNum] = `Value ${varNum}`;
+      } else {
+        next[varNum] = tag;
+      }
+      return next;
+    });
     if (!editSampleValues[varNum] || editSampleValues[varNum].startsWith('Sample')) {
       let sample = `Sample ${varNum}`;
       if (tag.includes('Student')) sample = 'Rahul Sharma';
@@ -355,13 +368,24 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
     setEditSampleImageUrl(tpl.sample_image_url || '');
     setEditLocalPreviewUrl('');
     setEditBodyText(tpl.body_preview || '');
-    setEditVariableMappings(tpl.variable_mappings || {});
 
     const matches = (tpl.body_preview || '').match(/\{\{(\d+)\}\}/g) || [];
     const unique = Array.from(new Set(matches.map((m) => m.replace(/[{}]/g, ''))));
+
+    const cleanMappings = {};
     const samples = {};
     unique.forEach((v) => {
-      const tag = (tpl.variable_mappings && tpl.variable_mappings[v]) || '';
+      const raw = (tpl.variable_mappings && tpl.variable_mappings[v]) || '';
+      let tag = raw;
+      if (['student_name', 'Student Name', '{Student Name}'].includes(raw)) tag = '{Student Name}';
+      else if (['parent_name', 'Parent Name', '{Parent Name}'].includes(raw)) tag = '{Parent Name}';
+      else if (['class_name', 'Class Name', 'Class', '{Class Name}'].includes(raw)) tag = '{Class Name}';
+      else if (['fees_due', 'Fees Due', '{Fees Due}'].includes(raw)) tag = '{Fees Due}';
+      else if (raw && raw.startsWith('Value ')) tag = raw;
+      else tag = `Value ${v}`;
+
+      cleanMappings[v] = tag;
+
       let sample = `Sample ${v}`;
       if (tag.includes('Student')) sample = 'Rahul Sharma';
       else if (tag.includes('Parent')) sample = 'Rajesh Sharma';
@@ -369,6 +393,8 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
       else if (tag.includes('Class')) sample = 'Class 10-A';
       samples[v] = sample;
     });
+
+    setEditVariableMappings(cleanMappings);
     setEditSampleValues(samples);
     setShowEditModal(true);
   };
@@ -408,6 +434,10 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
     }
 
     const orderedSamples = editDetectedVariables.map((v) => editSampleValues[v].trim());
+    const finalMappings = {};
+    editDetectedVariables.forEach((v) => {
+      finalMappings[v] = editVariableMappings[v]?.trim() || `Value ${v}`;
+    });
 
     setIsSubmittingEdit(true);
     try {
@@ -418,7 +448,7 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
         sample_image_url: editHeaderType === 'IMAGE' ? editSampleImageUrl.trim() : null,
         body_text: editBodyText.trim(),
         sample_values: orderedSamples,
-        variable_mappings: editVariableMappings,
+        variable_mappings: finalMappings,
         description: `Updated on ${new Date().toLocaleDateString()}` + (editHeaderType === 'IMAGE' ? ' [Image Header]' : ''),
       });
 
@@ -743,16 +773,25 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
                       {tpl.variable_mappings && Object.keys(tpl.variable_mappings).length > 0 && (
                         <div className="pt-2 border-t border-slate-200/60 flex flex-wrap gap-1.5 items-center">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Defaults:</span>
-                          {Object.entries(tpl.variable_mappings).map(([k, v]) => (
-                            <span
-                              key={k}
-                              className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200"
-                            >
-                              <span className="font-bold">{`{{${k}}}`}</span>
-                              <span className="text-slate-400">→</span>
-                              <span className="font-semibold">{v}</span>
-                            </span>
-                          ))}
+                          {Object.entries(tpl.variable_mappings).map(([k, rawVal]) => {
+                            let displayVal = rawVal;
+                            if (['student_name', 'Student Name', '{Student Name}'].includes(rawVal)) displayVal = '{Student Name}';
+                            else if (['parent_name', 'Parent Name', '{Parent Name}'].includes(rawVal)) displayVal = '{Parent Name}';
+                            else if (['class_name', 'Class Name', 'Class', '{Class Name}'].includes(rawVal)) displayVal = '{Class Name}';
+                            else if (['fees_due', 'Fees Due', '{Fees Due}'].includes(rawVal)) displayVal = '{Fees Due}';
+                            else if (rawVal && !rawVal.startsWith('Value ')) displayVal = `Value ${k}`;
+
+                            return (
+                              <span
+                                key={k}
+                                className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200"
+                              >
+                                <span className="font-bold">{`{{${k}}}`}</span>
+                                <span className="text-slate-400">→</span>
+                                <span className="font-semibold">{displayVal}</span>
+                              </span>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1390,26 +1429,28 @@ export const TemplatesPage = ({ onNavigateToSend, showToast }) => {
 
                     <div className="flex flex-wrap gap-1.5 pt-1">
                       {[
-                        { label: 'Student Name', tag: 'student_name' },
-                        { label: 'Parent Name', tag: 'parent_name' },
-                        { label: 'Class', tag: 'class_name' },
-                        { label: 'Fees Due', tag: 'fees_due' },
-                        { label: 'Due Date', tag: 'due_date' },
-                        { label: 'Attendance', tag: 'attendance' },
-                        { label: 'School Name', tag: 'school_name' },
-                        { label: 'Remarks', tag: 'remarks' },
+                        { label: 'Student Name', tag: '{Student Name}' },
+                        { label: 'Parent Name', tag: '{Parent Name}' },
+                        { label: 'Class Name', tag: '{Class Name}' },
+                        { label: 'Fees Due', tag: '{Fees Due}' },
                       ].map((chip) => (
                         <button
                           key={chip.tag}
                           type="button"
                           onClick={() => handleEditSelectTagForVariable(v, chip.tag)}
-                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-all ${
-                            editVariableMappings[v] === chip.tag
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                          className={`text-[10px] font-semibold px-2.5 py-1 rounded-md border transition-all cursor-pointer ${
+                            editVariableMappings[v] === chip.tag ||
+                            editVariableMappings[v] === chip.label ||
+                            editVariableMappings[v] === chip.tag.replace(/[{}]/g, '') ||
+                            (chip.tag === '{Class Name}' && (editVariableMappings[v] === 'class_name' || editVariableMappings[v] === 'Class')) ||
+                            (chip.tag === '{Fees Due}' && editVariableMappings[v] === 'fees_due') ||
+                            (chip.tag === '{Student Name}' && editVariableMappings[v] === 'student_name') ||
+                            (chip.tag === '{Parent Name}' && editVariableMappings[v] === 'parent_name')
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs font-bold'
                               : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                           }`}
                         >
-                          {chip.label}
+                          + {chip.label}
                         </button>
                       ))}
                     </div>

@@ -35,85 +35,6 @@ import { StatusBadge } from '../components/Badge';
 import { Modal } from '../components/Modal';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 
-// Smart auto-inferrer for template variables based on text context and school workflows
-const inferVariablesFromTemplate = (template) => {
-  if (!template || !template.body_preview) return {};
-  const body = template.body_preview;
-  const lowerBody = body.toLowerCase();
-  const lowerName = (template.name || '').toLowerCase();
-  const matches = body.match(/\{\{(\d+)\}\}/g) || [];
-  const uniqueNums = Array.from(new Set(matches.map((m) => m.replace(/[{}]/g, '')))).sort((a, b) => Number(a) - Number(b));
-
-  const isFeeContext = lowerName.includes('fee') || lowerName.includes('due') || lowerBody.includes('fee') || lowerBody.includes('due') || lowerBody.includes('amount') || lowerBody.includes('balance');
-  const isAttendanceContext = lowerName.includes('attendance') || lowerName.includes('absent') || lowerBody.includes('attendance') || lowerBody.includes('absent');
-
-  const result = {};
-  uniqueNums.forEach((num) => {
-    const placeholderStr = `{{${num}}}`;
-    const idx = lowerBody.indexOf(placeholderStr);
-    const startPos = Math.max(0, idx - 60);
-    const endPos = Math.min(lowerBody.length, idx + placeholderStr.length + 60);
-    const window = lowerBody.slice(startPos, endPos);
-    const windowBefore = lowerBody.slice(startPos, idx);
-
-    // 1. Fee / Amount
-    if (['fee', 'fees', 'amount', 'balance', '₹', 'rs', 'inr', 'rupees', 'payable', 'installment', 'dues'].some((k) => window.includes(k)) && !['due date', 'by date', 'last date', 'deadline'].some((k) => window.includes(k))) {
-      result[num] = '{Fees Due}';
-      return;
-    }
-    // 2. Due Date
-    if (['due date', 'by date', 'last date', 'deadline', 'pay by', 'valid till', 'on or before', 'before date'].some((k) => window.includes(k)) || ((window.includes('due on') || windowBefore.includes('by')) && isFeeContext)) {
-      result[num] = '{Due Date}';
-      return;
-    }
-    // 3. Attendance
-    if (['attendance', 'absent', 'present', 'marked'].some((k) => window.includes(k))) {
-      result[num] = '{Attendance}';
-      return;
-    }
-    // 4. Class / Grade
-    if (['class', 'grade', 'standard', 'sec', 'section', 'division'].some((k) => window.includes(k))) {
-      result[num] = '{Class Name}';
-      return;
-    }
-    // 5. Parent Name
-    if (['parent', 'guardian', 'father', 'mother', 'mr.', 'mrs.', 'shri', 'smt', 'dear parent'].some((k) => window.includes(k))) {
-      result[num] = '{Parent Name}';
-      return;
-    }
-    // 6. Student Name
-    if (['student', 'child', 'ward', 'kid', 'scholar', 'roll', 'dear student', 'name of'].some((k) => window.includes(k))) {
-      result[num] = '{Student Name}';
-      return;
-    }
-    // 7. School Name
-    if (['school', 'academy', 'institute', 'vidyalaya', 'institution', 'principal'].some((k) => window.includes(k))) {
-      result[num] = '{School Name}';
-      return;
-    }
-    // 8. Exam Name / Date
-    if (['exam', 'test', 'assessment'].some((k) => window.includes(k))) {
-      result[num] = ['date', 'schedule', 'on'].some((k) => window.includes(k)) ? '{Exam Date}' : '{Exam Name}';
-      return;
-    }
-
-    // Positional fallbacks
-    if (num === '1') {
-      result[num] = (lowerBody.includes('dear parent') || isFeeContext) ? '{Parent Name}' : '{Student Name}';
-    } else if (num === '2') {
-      result[num] = result['1'] === '{Parent Name}' ? '{Student Name}' : (isFeeContext ? '{Fees Due}' : '{Student Name}');
-    } else if (num === '3') {
-      result[num] = isFeeContext ? (result['2'] !== '{Fees Due}' ? '{Fees Due}' : '{Due Date}') : (isAttendanceContext ? '{Attendance}' : '{Class Name}');
-    } else if (num === '4') {
-      result[num] = '{Due Date}';
-    } else {
-      result[num] = `Value ${num}`;
-    }
-  });
-
-  return result;
-};
-
 // Helper function to filter templates strictly based on active workflow
 const filterTemplatesForWorkflow = (workflow, allTemplates) => {
   if (!allTemplates || allTemplates.length === 0) return [];
@@ -461,25 +382,15 @@ export const SendMessagePage = ({
     if (detectedVariables.length > 0) {
       const initialVars = {};
       const explicitMappings = selectedTemplate?.variable_mappings || {};
-      const inferredMappings = inferVariablesFromTemplate(selectedTemplate);
 
       detectedVariables.forEach((num) => {
-        // Priority 1: Explicit DB mapping saved previously
-        if (
-          explicitMappings[num] !== undefined &&
-          explicitMappings[num] !== null &&
-          explicitMappings[num].toString().trim() !== ''
-        ) {
-          initialVars[num] = explicitMappings[num];
-        }
-        // Priority 2: Smart NLP Context & Keyword Inferrer
-        else if (inferredMappings[num]) {
-          initialVars[num] = inferredMappings[num];
-        }
-        // Fallback default
-        else {
-          initialVars[num] = num === '1' ? '{Parent Name}' : '{Student Name}';
-        }
+        const raw = explicitMappings[num];
+        if (['student_name', 'Student Name', '{Student Name}'].includes(raw)) initialVars[num] = '{Student Name}';
+        else if (['parent_name', 'Parent Name', '{Parent Name}'].includes(raw)) initialVars[num] = '{Parent Name}';
+        else if (['class_name', 'Class Name', 'Class', '{Class Name}'].includes(raw)) initialVars[num] = '{Class Name}';
+        else if (['fees_due', 'Fees Due', '{Fees Due}'].includes(raw)) initialVars[num] = '{Fees Due}';
+        else if (raw && raw.trim() !== '' && !['remarks', 'remark', 'due_date', 'attendance', 'school_name'].includes(raw.toLowerCase())) initialVars[num] = raw;
+        else initialVars[num] = `Value ${num}`;
       });
       setTemplateVariables(initialVars);
     } else {
@@ -598,8 +509,10 @@ export const SendMessagePage = ({
 
   // Resolve variable value for preview
   const resolvePreviewVariable = (varNum, student) => {
-    const val = templateVariables[varNum] || '';
-    if (!val) return `{{${varNum}}}`;
+    let val = templateVariables[varNum];
+    if (val === undefined || val === null || val === '') {
+      val = `Value ${varNum}`;
+    }
 
     let resolved = val;
     const parentName = student?.parent_name || 'Parent';

@@ -142,6 +142,32 @@ class TemplateSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        mappings = ret.get("variable_mappings")
+        if isinstance(mappings, dict):
+            clean_mappings = {}
+            for k, v in mappings.items():
+                v_str = str(v).strip()
+                if v_str in ("student_name", "Student Name", "{Student Name}"):
+                    clean_mappings[k] = "{Student Name}"
+                elif v_str in ("parent_name", "Parent Name", "{Parent Name}"):
+                    clean_mappings[k] = "{Parent Name}"
+                elif v_str in ("class_name", "Class Name", "Class", "{Class Name}"):
+                    clean_mappings[k] = "{Class Name}"
+                elif v_str in ("fees_due", "Fees Due", "fees", "{Fees Due}"):
+                    clean_mappings[k] = "{Fees Due}"
+                elif v_str.startswith("Value "):
+                    clean_mappings[k] = v_str
+                elif v_str.lower() in ("remarks", "remark", "due_date", "attendance", "school_name"):
+                    clean_mappings[k] = f"Value {k}"
+                elif v_str:
+                    clean_mappings[k] = v_str
+                else:
+                    clean_mappings[k] = f"Value {k}"
+            ret["variable_mappings"] = clean_mappings
+        return ret
+
 
 class TemplateCreateMetaSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100)

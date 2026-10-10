@@ -1,0 +1,462 @@
+"""
+bot_service.py
+==============
+WhatsApp Chatbot state-machine for School WhatsApp Automation.
+
+Conversation states (stored in BotUserProfile):
+    INIT          → first contact; send greeting + language prompt
+    AWAIT_LANG    → user must choose English or Hindi
+    MENU          → show 3 main options
+    AWAIT_CATEGORY→ user chose Complaint or Feedback; show 4 categories
+    AWAIT_MESSAGE → user chose a category; wait for free-text
+    DONE          → message received and stored; loop back to MENU
+
+This service is called from the webhook handler for INBOUND messages only.
+It never touches MessageLog, MessageCampaign, or ChatMessage — preserving
+all existing behaviour completely.
+"""
+import asyncio
+import os
+from typing import Optional
+from asgiref.sync import async_to_sync
+from api.models import BotUserProfile, ComplaintFeedback, Student, ChatMessage
+from api.services.whatsapp_service import whatsapp_service
+from api.utils.logger import logger
+from api.utils.phone import sanitize_phone_number
+
+
+def _send_text_sync(phone: str, text: str, student: Optional[Student] = None) -> None:
+    """Send text message to WhatsApp and mirror in ChatMessage history."""
+    try:
+        clean_phone = sanitize_phone_number(phone)
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                result = async_to_sync(whatsapp_service.send_text_message)(
+                    recipient_number=clean_phone,
+                    message_text=text,
+                )
+            else:
+                result = loop.run_until_complete(
+                    whatsapp_service.send_text_message(
+                        recipient_number=clean_phone,
+                        message_text=text,
+                    )
+                )
+        except RuntimeError:
+            result = async_to_sync(whatsapp_service.send_text_message)(
+                recipient_number=clean_phone,
+                message_text=text,
+            )
+
+        wamid = result.get("message_id") if isinstance(result, dict) else None
+        succ = result.get("success", False) if isinstance(result, dict) else False
+
+        # Mirror outbound message to ChatMessage table for live conversation view
+        ChatMessage.objects.create(
+            student=student,
+            phone_number=clean_phone,
+            direction="OUTBOUND",
+            message_type="text",
+            text_content=text,
+            status="SENT" if succ else "FAILED",
+            whatsapp_message_id=wamid,
+            created_at=timezone.now(),
+        )
+        logger.info(f"[BotService] Outbound bot message to {clean_phone}: success={succ}, wamid={wamid}")
+    except Exception as exc:
+        logger.error(f"[BotService] Failed to send bot text to {phone}: {exc}", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Localised text strings
+# ---------------------------------------------------------------------------
+
+STRINGS = {
+    "en": {
+        "greeting": (
+            "👋 Hello! Welcome to *{school_name}*.\n\n"
+            "Please choose your preferred language:\n\n"
+            "1️⃣  *English*\n"
+            "2️⃣  *हिंदी (Hindi)*"
+        ),
+        "lang_set": "✅ Language set to *English*. Let's continue!",
+        "menu": (
+            "📋 *Main Menu*\n\n"
+            "Please choose an option:\n\n"
+            "1️⃣  Complaint\n"
+            "2️⃣  Feedback\n"
+            "3️⃣  Contact School"
+        ),
+        "choose_category": (
+            "Please choose a category for your *{type_label}*:\n\n"
+            "1️⃣  Study Related\n"
+            "2️⃣  School Related\n"
+            "3️⃣  Teacher Related\n"
+            "4️⃣  Other"
+        ),
+        "type_your_message": (
+            "✍️ Please type your *{category_label}* {type_label} now.\n"
+            "(Send any message and we will record it.)"
+        ),
+        "saved": (
+            "✅ Thank you, *{name}*! Your {type_label} has been recorded and will be reviewed shortly.\n\n"
+            "Reply with *Hi* anytime to submit another one."
+        ),
+        "invalid_option": "❓ Sorry, I didn't understand that. Please send *1*, *2*, or *3* to choose an option.",
+        "invalid_category": "❓ Please send *1*, *2*, *3*, or *4* to choose a category.",
+        "contact_school": (
+            "📞 *School Contact*\n\n"
+            "Phone: +91 00000 00000\n"
+            "Email: school@example.com\n\n"
+            "Reply *Hi* to go back to the main menu."
+        ),
+        "type_labels": {
+            "COMPLAINT": "complaint",
+            "FEEDBACK": "feedback",
+        },
+        "category_labels": {
+            "STUDY": "Study Related",
+            "SCHOOL": "School Related",
+            "TEACHER": "Teacher Related",
+            "OTHER": "Other",
+        },
+    },
+    "hi": {
+        "greeting": (
+            "👋 नमस्ते! *{school_name}* में आपका स्वागत है।\n\n"
+            "कृपया अपनी पसंदीदा भाषा चुनें:\n\n"
+            "1️⃣  *English*\n"
+            "2️⃣  *हिंदी (Hindi)*"
+        ),
+        "lang_set": "✅ भाषा *हिंदी* में सेट की गई। आगे बढ़ते हैं!",
+        "menu": (
+            "📋 *मुख्य मेनू*\n\n"
+            "कृपया एक विकल्प चुनें:\n\n"
+            "1️⃣  शिकायत (Complaint)\n"
+            "2️⃣  सुझाव (Feedback)\n"
+            "3️⃣  स्कूल से संपर्क करें"
+        ),
+        "choose_category": (
+            "कृपया अपनी *{type_label}* के लिए श्रेणी चुनें:\n\n"
+            "1️⃣  पढ़ाई से संबंधित\n"
+            "2️⃣  स्कूल से संबंधित\n"
+            "3️⃣  शिक्षक से संबंधित\n"
+            "4️⃣  अन्य"
+        ),
+        "type_your_message": (
+            "✍️ कृपया अपनी *{category_label}* {type_label} अभी टाइप करें।\n"
+            "(कोई भी संदेश भेजें, हम उसे दर्ज कर लेंगे।)"
+        ),
+        "saved": (
+            "✅ धन्यवाद, *{name}*! आपकी {type_label} दर्ज कर ली गई है और जल्द ही इसकी समीक्षा की जाएगी।\n\n"
+            "दूसरी शिकायत/सुझाव के लिए *Hi* भेजें।"
+        ),
+        "invalid_option": "❓ क्षमा करें, मैं समझ नहीं पाया। कृपया *1*, *2* या *3* भेजें।",
+        "invalid_category": "❓ कृपया श्रेणी चुनने के लिए *1*, *2*, *3* या *4* भेजें।",
+        "contact_school": (
+            "📞 *स्कूल संपर्क*\n\n"
+            "फोन: +91 00000 00000\n"
+            "ईमेल: school@example.com\n\n"
+            "मुख्य मेनू पर वापस जाने के लिए *Hi* भेजें।"
+        ),
+        "type_labels": {
+            "COMPLAINT": "शिकायत",
+            "FEEDBACK": "सुझाव",
+        },
+        "category_labels": {
+            "STUDY": "पढ़ाई से संबंधित",
+            "SCHOOL": "स्कूल से संबंधित",
+            "TEACHER": "शिक्षक से संबंधित",
+            "OTHER": "अन्य",
+        },
+    },
+}
+
+SCHOOL_NAME = "Wonder School"
+
+# Number → menu-option map
+MENU_MAP = {"1": "COMPLAINT", "2": "FEEDBACK", "3": "CONTACT"}
+CATEGORY_MAP = {"1": "STUDY", "2": "SCHOOL", "3": "TEACHER", "4": "OTHER"}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _t(profile: BotUserProfile, key: str, **kwargs) -> str:
+    """Return a localised string for the user's language."""
+    lang = profile.language if profile.language in STRINGS else "en"
+    text = STRINGS[lang].get(key, STRINGS["en"].get(key, key))
+    return text.format(school_name=SCHOOL_NAME, **kwargs)
+
+
+def _type_label(profile: BotUserProfile, submission_type: str) -> str:
+    lang = profile.language if profile.language in STRINGS else "en"
+    return STRINGS[lang]["type_labels"].get(submission_type, submission_type)
+
+
+def _category_label(profile: BotUserProfile, category: str) -> str:
+    lang = profile.language if profile.language in STRINGS else "en"
+    return STRINGS[lang]["category_labels"].get(category, category)
+
+
+def _get_student(phone: str) -> Optional[Student]:
+    student = Student.objects.filter(whatsapp_number=phone).first()
+    if not student and len(phone) >= 10:
+        student = Student.objects.filter(whatsapp_number__endswith=phone[-10:]).first()
+    return student
+
+
+def _get_or_create_profile(phone: str, sender_name: Optional[str] = None) -> BotUserProfile:
+    """
+    Retrieve or create a BotUserProfile for the given phone number.
+    Always tries to link to a Student and updates display_name if a student
+    is now in the DB (handles future student additions).
+    """
+    student = _get_student(phone)
+    profile, created = BotUserProfile.objects.get_or_create(
+        phone_number=phone,
+        defaults={
+            "student": student,
+            "display_name": (
+                student.student_name if student
+                else (sender_name or "WhatsApp User")
+            ),
+            "language": "en",
+            "conversation_state": "INIT",
+        },
+    )
+
+    # Update student link and name if a student joined after profile creation
+    changed = False
+    if student and profile.student_id != student.id:
+        profile.student = student
+        profile.display_name = student.student_name
+        changed = True
+    elif student and profile.display_name != student.student_name:
+        # Student name may have been updated
+        profile.display_name = student.student_name
+        changed = True
+    elif not student and sender_name and profile.display_name == "WhatsApp User":
+        profile.display_name = sender_name
+        changed = True
+
+    if changed:
+        profile.save(update_fields=["student", "display_name", "updated_at"])
+
+    return profile
+
+
+# ---------------------------------------------------------------------------
+# Gemini contextual reply (optional — used only if GEMINI_API_KEY is set)
+# ---------------------------------------------------------------------------
+
+def _gemini_reply(prompt: str) -> Optional[str]:
+    """
+    Optionally call Gemini to generate a short, friendly reply.
+    Returns None if Gemini is not configured or the call fails, so the
+    caller can fall back to a hard-coded string.
+    """
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        import google.generativeai as genai  # type: ignore
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        return (response.text or "").strip() or None
+    except Exception as exc:
+        logger.warning(f"[BotService] Gemini call failed (will use fallback): {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# State-machine entry point
+# ---------------------------------------------------------------------------
+
+def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = None) -> None:
+    """
+    Main entry point called by the webhook handler for every INBOUND message.
+
+    This function is intentionally synchronous and self-contained.
+    It must NEVER raise an exception — all errors are caught and logged.
+    """
+    try:
+        phone = sanitize_phone_number(phone)
+        text_clean = (text or "").strip()
+        text_lower = text_clean.lower()
+
+        profile = _get_or_create_profile(phone, sender_name)
+
+        # ── Reset on "hi" / "hello" regardless of state ──────────────────
+        if text_lower in ("hi", "hello", "helo", "hey", "namaste", "namasthe"):
+            profile.conversation_state = "INIT"
+            profile.pending_type = None
+            profile.pending_category = None
+            profile.save(update_fields=["conversation_state", "pending_type", "pending_category", "updated_at"])
+
+        state = profile.conversation_state
+
+        # ── INIT ──────────────────────────────────────────────────────────
+        if state == "INIT":
+            greeting = _t(profile, "greeting")
+            _send_text_sync(phone, greeting)
+            profile.conversation_state = "AWAIT_LANG"
+            profile.save(update_fields=["conversation_state", "updated_at"])
+            return
+
+        # ── AWAIT_LANG ────────────────────────────────────────────────────
+        if state == "AWAIT_LANG":
+            if text_lower in ("1", "english", "eng"):
+                profile.language = "en"
+                confirm = _t(profile, "lang_set")
+            elif text_lower in ("2", "hindi", "हिंदी", "hindi", "hin"):
+                profile.language = "hi"
+                confirm = _t(profile, "lang_set")
+            else:
+                # Re-prompt
+                _send_text_sync(phone, _t(profile, "greeting"))
+                return
+
+            profile.save(update_fields=["language", "updated_at"])
+            _send_text_sync(phone, confirm)
+            # Show main menu immediately after language confirmation
+            _send_text_sync(phone, _t(profile, "menu"))
+            profile.conversation_state = "MENU"
+            profile.save(update_fields=["conversation_state", "updated_at"])
+            return
+
+        # ── MENU ──────────────────────────────────────────────────────────
+        if state == "MENU":
+            choice = MENU_MAP.get(text_clean) or MENU_MAP.get(text_lower)
+            if choice is None:
+                # Try natural language match
+                if any(w in text_lower for w in ("complaint", "shikayat", "शिकायत")):
+                    choice = "COMPLAINT"
+                elif any(w in text_lower for w in ("feedback", "sujhav", "सुझाव", "suggestion")):
+                    choice = "FEEDBACK"
+                elif any(w in text_lower for w in ("contact", "school", "संपर्क")):
+                    choice = "CONTACT"
+
+            if choice == "CONTACT":
+                _send_text_sync(phone, _t(profile, "contact_school"))
+                # Stay in MENU state so user can come back
+                return
+
+            if choice in ("COMPLAINT", "FEEDBACK"):
+                profile.pending_type = choice
+                profile.conversation_state = "AWAIT_CATEGORY"
+                profile.save(update_fields=["pending_type", "conversation_state", "updated_at"])
+                _send_text_sync(
+                    phone,
+                    _t(profile, "choose_category", type_label=_type_label(profile, choice))
+                )
+                return
+
+            # Unrecognised
+            _send_text_sync(phone, _t(profile, "invalid_option"))
+            _send_text_sync(phone, _t(profile, "menu"))
+            return
+
+        # ── AWAIT_CATEGORY ────────────────────────────────────────────────
+        if state == "AWAIT_CATEGORY":
+            category = CATEGORY_MAP.get(text_clean) or CATEGORY_MAP.get(text_lower)
+            if category is None:
+                # Natural language match
+                lower = text_lower
+                if any(w in lower for w in ("study", "padhai", "पढ़ाई", "education", "class")):
+                    category = "STUDY"
+                elif any(w in lower for w in ("school", "स्कूल", "building", "facility")):
+                    category = "SCHOOL"
+                elif any(w in lower for w in ("teacher", "शिक्षक", "sir", "ma'am", "mam")):
+                    category = "TEACHER"
+                else:
+                    category = None
+
+            if category is None:
+                _send_text_sync(phone, _t(profile, "invalid_category"))
+                return
+
+            profile.pending_category = category
+            profile.conversation_state = "AWAIT_MESSAGE"
+            profile.save(update_fields=["pending_category", "conversation_state", "updated_at"])
+
+            pending_type = profile.pending_type or "COMPLAINT"
+            _send_text_sync(
+                phone,
+                _t(
+                    profile,
+                    "type_your_message",
+                    category_label=_category_label(profile, category),
+                    type_label=_type_label(profile, pending_type),
+                )
+            )
+            return
+
+        # ── AWAIT_MESSAGE ─────────────────────────────────────────────────
+        if state == "AWAIT_MESSAGE":
+            if not text_clean:
+                _send_text_sync(phone, _t(profile, "type_your_message",
+                    category_label=_category_label(profile, profile.pending_category or "OTHER"),
+                    type_label=_type_label(profile, profile.pending_type or "COMPLAINT")))
+                return
+
+            student = profile.student
+            student_name_snap = student.student_name if student else profile.display_name
+            class_name_snap = ""
+            if student and student.school_class:
+                cls = student.school_class
+                class_name_snap = f"{cls.name} - {cls.section}" if cls.section else cls.name
+
+            ComplaintFeedback.objects.create(
+                phone_number=phone,
+                student=student,
+                student_name=student_name_snap,
+                class_name=class_name_snap,
+                language=profile.language,
+                submission_type=profile.pending_type or "COMPLAINT",
+                category=profile.pending_category or "OTHER",
+                message=text_clean,
+            )
+            logger.info(
+                f"[BotService] Saved {profile.pending_type} from {phone} "
+                f"(cat={profile.pending_category}): {text_clean[:80]}"
+            )
+
+            # Optional: Gemini-enhanced acknowledgement
+            gemini_ack = None
+            if os.getenv("GEMINI_API_KEY", "").strip():
+                prompt = (
+                    f"A student/parent sent this {profile.pending_type.lower()} via WhatsApp: "
+                    f"\"{text_clean}\". Write a warm, concise (2-3 sentence) acknowledgement "
+                    f"in {'English' if profile.language == 'en' else 'Hindi'} that their "
+                    f"{profile.pending_type.lower()} has been received and will be reviewed. "
+                    "Do NOT make up any contact details or promise a time frame."
+                )
+                gemini_ack = _gemini_reply(prompt)
+
+            ack_text = gemini_ack or _t(
+                profile, "saved",
+                name=student_name_snap,
+                type_label=_type_label(profile, profile.pending_type or "COMPLAINT"),
+            )
+            _send_text_sync(phone, ack_text)
+
+            # Reset state to MENU for the next round
+            profile.conversation_state = "MENU"
+            profile.pending_type = None
+            profile.pending_category = None
+            profile.save(update_fields=["conversation_state", "pending_type", "pending_category", "updated_at"])
+            return
+
+        # ── Fallback — unknown state ───────────────────────────────────────
+        logger.warning(f"[BotService] Unknown state '{state}' for {phone}. Resetting to INIT.")
+        profile.conversation_state = "INIT"
+        profile.pending_type = None
+        profile.pending_category = None
+        profile.save(update_fields=["conversation_state", "pending_type", "pending_category", "updated_at"])
+
+    except Exception as exc:
+        logger.error(f"[BotService] Unhandled exception for {phone}: {exc}", exc_info=True)

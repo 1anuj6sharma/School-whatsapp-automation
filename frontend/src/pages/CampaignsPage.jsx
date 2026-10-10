@@ -1,20 +1,37 @@
-import React, { useEffect, useState } from 'react';
-import { Layers, Send, RefreshCw, ArrowRight, Trash2, Calendar, AlertTriangle, CheckSquare, Square } from 'lucide-react';
+import React, { useEffect, useState, useMemo } from 'react';
+import {
+  Layers,
+  Send,
+  RefreshCw,
+  ArrowRight,
+  Trash2,
+  Calendar,
+  AlertTriangle,
+  Hash,
+  Search,
+  ScrollText,
+} from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { EmptyState } from '../components/EmptyState';
 import { Modal } from '../components/Modal';
+import { Pagination } from '../components/Pagination';
+
+const PAGE_SIZE = 10;
 
 export const CampaignsPage = ({
   onNavigateToDetail,
   onNavigateToSend,
+  onNavigateToLogsWithCampaign,
   showToast,
 }) => {
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState([]);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Date Delete Modal State
   const [isDateModalOpen, setIsDateModalOpen] = useState(false);
@@ -27,7 +44,7 @@ export const CampaignsPage = ({
     setLoading(true);
     try {
       const data = await api.getCampaigns();
-      setCampaigns(data);
+      setCampaigns(data || []);
     } catch (err) {
       console.error('Failed to fetch campaigns', err);
       showToast?.({
@@ -46,13 +63,43 @@ export const CampaignsPage = ({
     return () => clearInterval(interval);
   }, []);
 
+  // Filter campaigns by search query
+  const filteredCampaigns = useMemo(() => {
+    if (!searchQuery.trim()) return campaigns;
+    const q = searchQuery.toLowerCase().trim();
+    return campaigns.filter((c) => {
+      const idStr = String(c.id || '');
+      const className = (c.class_name || '').toLowerCase();
+      const templateName = (c.template_name || '').toLowerCase();
+      const status = (c.status || '').toLowerCase();
+      return (
+        idStr.includes(q) ||
+        className.includes(q) ||
+        templateName.includes(q) ||
+        status.includes(q)
+      );
+    });
+  }, [campaigns, searchQuery]);
+
+  // Paginated campaigns (10 per page)
+  const paginatedCampaigns = useMemo(() => {
+    const startIndex = (currentPage - 1) * PAGE_SIZE;
+    return filteredCampaigns.slice(startIndex, startIndex + PAGE_SIZE);
+  }, [filteredCampaigns, currentPage]);
+
   // Selection handlers
-  const handleSelectAll = (e) => {
+  const handleSelectPage = (e) => {
     if (e.target.checked) {
-      setSelectedIds(campaigns.map((c) => c.id));
+      const pageIds = paginatedCampaigns.map((c) => c.id);
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])));
     } else {
-      setSelectedIds([]);
+      const pageIds = new Set(paginatedCampaigns.map((c) => c.id));
+      setSelectedIds((prev) => prev.filter((id) => !pageIds.has(id)));
     }
+  };
+
+  const handleSelectAllLoaded = () => {
+    setSelectedIds(filteredCampaigns.map((c) => c.id));
   };
 
   const handleToggleSelect = (id) => {
@@ -190,8 +237,10 @@ export const CampaignsPage = ({
     }
   };
 
-  const isAllSelected = campaigns.length > 0 && selectedIds.length === campaigns.length;
-  const isIndeterminate = selectedIds.length > 0 && selectedIds.length < campaigns.length;
+  const isPageSelected =
+    paginatedCampaigns.length > 0 && paginatedCampaigns.every((c) => selectedIds.includes(c.id));
+  const isPageIndeterminate =
+    paginatedCampaigns.some((c) => selectedIds.includes(c.id)) && !isPageSelected;
 
   if (loading && campaigns.length === 0) {
     return <LoadingSpinner message="Loading broadcast campaigns..." />;
@@ -207,7 +256,7 @@ export const CampaignsPage = ({
             <span>Broadcast Campaigns</span>
           </h2>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Track real-time delivery status across all classroom WhatsApp broadcasts.
+            Track real-time delivery status, Campaign IDs, and progress across classroom WhatsApp broadcasts.
           </p>
         </div>
 
@@ -238,6 +287,27 @@ export const CampaignsPage = ({
         </div>
       </div>
 
+      {/* Quick Search & Summary Bar */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="Search Campaign ID, class, or template..."
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all"
+          />
+        </div>
+
+        <div className="text-xs font-bold text-slate-600 flex items-center gap-2 px-2">
+          <span>Total: <strong className="text-slate-900">{campaigns.length}</strong> broadcasts</span>
+        </div>
+      </div>
+
       {/* Bulk Selection Bar */}
       {selectedIds.length > 0 && (
         <div className="bg-rose-50 border border-rose-200 p-3.5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 animate-fade-in shadow-xs">
@@ -246,6 +316,14 @@ export const CampaignsPage = ({
               {selectedIds.length}
             </span>
             <span>campaign(s) selected for deletion</span>
+            {selectedIds.length < filteredCampaigns.length && (
+              <button
+                onClick={handleSelectAllLoaded}
+                className="underline text-xs text-rose-700 hover:text-rose-900 font-bold ml-2"
+              >
+                Select all {filteredCampaigns.length} matching campaigns
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
             <button
@@ -274,25 +352,31 @@ export const CampaignsPage = ({
           actionLabel="Launch Broadcast"
           onAction={onNavigateToSend}
         />
+      ) : filteredCampaigns.length === 0 ? (
+        <EmptyState
+          icon={Layers}
+          title="No matching campaigns"
+          description={`No broadcast campaigns match "${searchQuery}".`}
+        />
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-700 min-w-[750px]">
+            <table className="w-full text-left text-sm text-slate-700 min-w-[850px]">
               <thead className="bg-slate-50/80 text-xs uppercase font-semibold text-slate-500 border-b border-slate-200">
                 <tr>
                   <th className="px-4 py-4 w-12 text-center">
                     <input
                       type="checkbox"
-                      checked={isAllSelected}
+                      checked={isPageSelected}
                       ref={(input) => {
-                        if (input) input.indeterminate = isIndeterminate;
+                        if (input) input.indeterminate = isPageIndeterminate;
                       }}
-                      onChange={handleSelectAll}
+                      onChange={handleSelectPage}
                       className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
-                      title="Select All Campaigns"
+                      title="Select Campaigns on Current Page"
                     />
                   </th>
-                  <th className="px-5 py-4">Campaign</th>
+                  <th className="px-5 py-4">Campaign ID</th>
                   <th className="px-5 py-4">Target Class</th>
                   <th className="px-5 py-4">Template</th>
                   <th className="px-5 py-4">Progress</th>
@@ -302,7 +386,7 @@ export const CampaignsPage = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {campaigns.map((camp) => {
+                {paginatedCampaigns.map((camp) => {
                   const processed = camp.successful_count + camp.failed_count;
                   const total = camp.total_recipients || 1;
                   const progressPct = Math.min(100, Math.round((processed / total) * 100));
@@ -323,7 +407,13 @@ export const CampaignsPage = ({
                           className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
                         />
                       </td>
-                      <td className="px-5 py-4 font-mono font-bold text-slate-900">#{camp.id}</td>
+                      {/* Campaign ID Display */}
+                      <td className="px-5 py-4">
+                        <div className="inline-flex items-center gap-1 font-mono font-bold text-xs text-indigo-800 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
+                          <Hash className="w-3 h-3 text-indigo-600" />
+                          <span>{camp.id}</span>
+                        </div>
+                      </td>
                       <td className="px-5 py-4 font-semibold text-slate-900">
                         {camp.class_name || `Class #${camp.class_id}`}
                       </td>
@@ -357,12 +447,23 @@ export const CampaignsPage = ({
                         {new Date(camp.created_at).toLocaleString()}
                       </td>
                       <td className="px-5 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {onNavigateToLogsWithCampaign && (
+                            <button
+                              onClick={() => onNavigateToLogsWithCampaign(camp.id)}
+                              className="flex items-center gap-1 text-xs font-semibold text-indigo-700 hover:text-indigo-800 px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-all"
+                              title={`View Delivery Logs for Campaign #${camp.id}`}
+                            >
+                              <ScrollText className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Logs</span>
+                            </button>
+                          )}
                           <button
                             onClick={() => onNavigateToDetail(camp.id)}
                             className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition-all"
+                            title="View Campaign Details & Progress"
                           >
-                            <span>View Logs</span>
+                            <span>Details</span>
                             <ArrowRight className="w-3.5 h-3.5" />
                           </button>
                           <button
@@ -381,6 +482,15 @@ export const CampaignsPage = ({
               </tbody>
             </table>
           </div>
+
+          {/* 10 Campaigns per page Pagination */}
+          <Pagination
+            currentPage={currentPage}
+            totalItems={filteredCampaigns.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={setCurrentPage}
+            itemLabel="broadcast campaigns"
+          />
         </div>
       )}
 

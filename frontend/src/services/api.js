@@ -342,5 +342,49 @@ export const api = {
     });
     return handleResponse(res);
   },
+
+  // Complaints & Feedback
+  async getComplaintsFeedback(params = {}) {
+    const url = new URL(`${API_BASE}/api/complaints-feedback`, window.location.origin);
+    Object.keys(params).forEach(key => {
+      if (params[key] !== undefined && params[key] !== null && params[key] !== '') {
+        url.searchParams.append(key, params[key]);
+      }
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async getComplaintsFeedbackStats() {
+    const res = await fetch(`${API_BASE}/api/complaints-feedback/stats`);
+    return handleResponse(res);
+  },
+
+  async updateComplaintFeedback(id, data) {
+    const res = await fetch(`${API_BASE}/api/complaints-feedback/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async deleteComplaintFeedback(id) {
+    const res = await fetch(`${API_BASE}/api/complaints-feedback/${id}`, {
+      method: 'DELETE',
+    });
+    return handleResponse(res);
+  },
+
+  async getBotProfiles(params = {}) {
+    const url = new URL(`${API_BASE}/api/bot/profiles`, window.location.origin);
+    Object.keys(params).forEach(key => {
+      if (params[key] !== undefined && params[key] !== null && params[key] !== '') {
+        url.searchParams.append(key, params[key]);
+      }
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
 };
 

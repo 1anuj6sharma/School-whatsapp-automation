@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog, ChatMessage
+from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog, ChatMessage, ComplaintFeedback, BotUserProfile
 from .serializers import (
     ClassSerializer,
     ClassCreateSerializer,
@@ -33,9 +33,12 @@ from .serializers import (
     TestMessageSerializer,
     ChatMessageSerializer,
     SendConversationMessageSerializer,
+    ComplaintFeedbackSerializer,
+    BotUserProfileSerializer,
 )
 from .services.whatsapp_service import whatsapp_service
 from .services.campaign_service import campaign_service
+from .services.bot_service import handle_inbound_message  # WhatsApp chatbot
 from .utils.logger import logger
 from .utils.phone import sanitize_phone_number, validate_phone_number
 from .utils.template_infer import infer_template_variable_mappings
@@ -754,17 +757,17 @@ class MessageLogListView(APIView):
         from_date = request.query_params.get("from_date")
         to_date = request.query_params.get("to_date")
         before_date = request.query_params.get("before_date")
-        limit = int(request.query_params.get("limit", 100))
+        limit = int(request.query_params.get("limit", 2000))
         offset = int(request.query_params.get("offset", 0))
 
         qs = MessageLog.objects.select_related("student").order_by("-created_at")
 
-        if campaign_id:
+        if campaign_id and str(campaign_id).strip().upper() not in ("ALL", "", "NONE"):
             qs = qs.filter(campaign_id=campaign_id)
         if student_id:
             qs = qs.filter(student_id=student_id)
-        if status_filter and status_filter.upper() != "ALL":
-            qs = qs.filter(status=status_filter.upper())
+        if status_filter and str(status_filter).strip().upper() not in ("ALL", "", "NONE"):
+            qs = qs.filter(status__iexact=str(status_filter).strip())
         if from_date:
             parsed_from = parse_date(str(from_date).strip())
             if parsed_from:
@@ -1088,6 +1091,19 @@ class WhatsAppWebhookView(APIView):
                             created_at=event_time,
                         )
                         logger.info(f"[Webhook] Saved incoming WhatsApp message from {clean_phone}: '{extracted_text}'")
+
+                    # ── Bot chatbot handler (text messages only) ──────────
+                    # Only processes plain text; interactive button replies
+                    # are also handled since extracted_text carries the title.
+                    if msg_type in ("text", "interactive", "button"):
+                        try:
+                            handle_inbound_message(
+                                phone=clean_phone,
+                                text=extracted_text,
+                                sender_name=sender_name or (student.student_name if student else None),
+                            )
+                        except Exception as bot_exc:
+                            logger.error(f"[Webhook] Bot handler error for {clean_phone}: {bot_exc}")
 
                 # 3. Process Template Status Updates
                 field = change.get("field")
@@ -1531,4 +1547,183 @@ class AuthLogoutView(APIView):
 
     def post(self, request):
         return Response({"success": True, "message": "Logged out successfully."})
+
+
+# ─── Complaints & Feedback Views ──────────────────────────────────────────────
+
+class ComplaintFeedbackListView(APIView):
+    def get(self, request):
+        queryset = ComplaintFeedback.objects.select_related("student", "student__school_class").all()
+
+        # Filters
+        submission_type = request.query_params.get("type") or request.query_params.get("submission_type")
+        if submission_type:
+            queryset = queryset.filter(submission_type__iexact=submission_type)
+
+        category = request.query_params.get("category")
+        if category:
+            queryset = queryset.filter(category__iexact=category)
+
+        status_param = request.query_params.get("status")
+        if status_param:
+            queryset = queryset.filter(status__iexact=status_param)
+
+        class_id = request.query_params.get("class_id")
+        if class_id:
+            queryset = queryset.filter(
+                Q(student__school_class_id=class_id) | Q(class_name__icontains=str(class_id))
+            )
+
+        search = request.query_params.get("search")
+        if search:
+            search_clean = search.strip()
+            queryset = queryset.filter(
+                Q(phone_number__icontains=search_clean)
+                | Q(student_name__icontains=search_clean)
+                | Q(student__student_name__icontains=search_clean)
+                | Q(message__icontains=search_clean)
+                | Q(class_name__icontains=search_clean)
+            )
+
+        date_from = request.query_params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+
+        date_to = request.query_params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+
+        # Overall summary stats (computed efficiently across current filters or all)
+        total_count = queryset.count()
+        complaints_count = queryset.filter(submission_type="COMPLAINT").count()
+        feedbacks_count = queryset.filter(submission_type="FEEDBACK").count()
+        pending_count = queryset.filter(status="PENDING").count()
+        resolved_count = queryset.filter(status="RESOLVED").count()
+
+        # Pagination
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+        except (ValueError, TypeError):
+            page = 1
+
+        try:
+            page_size = min(100, max(1, int(request.query_params.get("page_size", 10))))
+        except (ValueError, TypeError):
+            page_size = 10
+
+        total_pages = max(1, (total_count + page_size - 1) // page_size) if total_count > 0 else 1
+        offset = (page - 1) * page_size
+        results = queryset[offset : offset + page_size]
+
+        serializer = ComplaintFeedbackSerializer(results, many=True)
+
+        return Response({
+            "count": total_count,
+            "total_pages": total_pages,
+            "current_page": page,
+            "page_size": page_size,
+            "stats": {
+                "total": total_count,
+                "complaints": complaints_count,
+                "feedbacks": feedbacks_count,
+                "pending": pending_count,
+                "resolved": resolved_count,
+            },
+            "results": serializer.data,
+        })
+
+    def post(self, request):
+        serializer = ComplaintFeedbackSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save()
+        return Response(ComplaintFeedbackSerializer(item).data, status=status.HTTP_201_CREATED)
+
+
+class ComplaintFeedbackDetailView(APIView):
+    def get_object(self, pk):
+        try:
+            return ComplaintFeedback.objects.select_related("student", "student__school_class").get(pk=pk)
+        except ComplaintFeedback.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        item = self.get_object(pk)
+        if not item:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(ComplaintFeedbackSerializer(item).data)
+
+    def patch(self, request, pk):
+        item = self.get_object(pk)
+        if not item:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        new_status = request.data.get("status")
+        if new_status:
+            item.status = new_status
+            if new_status.upper() == "RESOLVED" and not item.resolved_at:
+                item.resolved_at = timezone.now()
+            elif new_status.upper() != "RESOLVED":
+                item.resolved_at = None
+
+        if "admin_reply" in request.data:
+            item.admin_reply = request.data.get("admin_reply")
+
+        if "category" in request.data:
+            item.category = request.data.get("category")
+
+        item.save()
+        return Response(ComplaintFeedbackSerializer(item).data)
+
+    def delete(self, request, pk):
+        item = self.get_object(pk)
+        if not item:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        item.delete()
+        return Response({"success": True, "message": "Record deleted successfully."}, status=status.HTTP_200_OK)
+
+
+class ComplaintFeedbackStatsView(APIView):
+    def get(self, request):
+        total = ComplaintFeedback.objects.count()
+        complaints = ComplaintFeedback.objects.filter(submission_type="COMPLAINT").count()
+        feedbacks = ComplaintFeedback.objects.filter(submission_type="FEEDBACK").count()
+        pending = ComplaintFeedback.objects.filter(status="PENDING").count()
+        in_review = ComplaintFeedback.objects.filter(status="IN_REVIEW").count()
+        resolved = ComplaintFeedback.objects.filter(status="RESOLVED").count()
+
+        # Category breakdowns
+        study = ComplaintFeedback.objects.filter(category="STUDY").count()
+        school = ComplaintFeedback.objects.filter(category="SCHOOL").count()
+        teacher = ComplaintFeedback.objects.filter(category="TEACHER").count()
+        other = ComplaintFeedback.objects.filter(category="OTHER").count()
+
+        return Response({
+            "total": total,
+            "complaints": complaints,
+            "feedbacks": feedbacks,
+            "pending": pending,
+            "in_review": in_review,
+            "resolved": resolved,
+            "categories": {
+                "study": study,
+                "school": school,
+                "teacher": teacher,
+                "other": other,
+            }
+        })
+
+
+class BotUserProfileListView(APIView):
+    def get(self, request):
+        queryset = BotUserProfile.objects.select_related("student", "student__school_class").all()
+        search = request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(
+                Q(phone_number__icontains=search)
+                | Q(display_name__icontains=search)
+                | Q(student__student_name__icontains=search)
+            )
+
+        serializer = BotUserProfileSerializer(queryset, many=True)
+        return Response(serializer.data)
 

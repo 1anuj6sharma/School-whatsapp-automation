@@ -25,6 +25,10 @@ from .views import (
     AuthLoginView,
     AuthMeView,
     AuthLogoutView,
+    ComplaintFeedbackListView,
+    ComplaintFeedbackDetailView,
+    ComplaintFeedbackStatsView,
+    BotUserProfileListView,
 )
 
 urlpatterns = [
@@ -102,4 +106,16 @@ urlpatterns = [
     path("api/whatsapp/embedded-signup/config/", EmbeddedSignupConfigView.as_view(), name="embedded-config-slash"),
     path("api/whatsapp/embedded-signup/exchange-token", EmbeddedSignupExchangeTokenView.as_view(), name="embedded-exchange"),
     path("api/whatsapp/embedded-signup/exchange-token/", EmbeddedSignupExchangeTokenView.as_view(), name="embedded-exchange-slash"),
+
+    # Complaints & Feedback API
+    path("api/complaints-feedback", ComplaintFeedbackListView.as_view(), name="complaints-feedback-list"),
+    path("api/complaints-feedback/", ComplaintFeedbackListView.as_view(), name="complaints-feedback-list-slash"),
+    path("api/complaints-feedback/stats", ComplaintFeedbackStatsView.as_view(), name="complaints-feedback-stats"),
+    path("api/complaints-feedback/stats/", ComplaintFeedbackStatsView.as_view(), name="complaints-feedback-stats-slash"),
+    path("api/complaints-feedback/<int:pk>", ComplaintFeedbackDetailView.as_view(), name="complaints-feedback-detail"),
+    path("api/complaints-feedback/<int:pk>/", ComplaintFeedbackDetailView.as_view(), name="complaints-feedback-detail-slash"),
+
+    # Bot Profiles API
+    path("api/bot/profiles", BotUserProfileListView.as_view(), name="bot-profiles-list"),
+    path("api/bot/profiles/", BotUserProfileListView.as_view(), name="bot-profiles-list-slash"),
 ]

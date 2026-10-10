@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog, ChatMessage
+from .models import Class, Student, MessageTemplate, MessageCampaign, MessageLog, ChatMessage, ComplaintFeedback, BotUserProfile
 from .utils.phone import sanitize_phone_number, validate_phone_number
 
 class ClassSerializer(serializers.ModelSerializer):
@@ -318,4 +318,94 @@ class SendConversationMessageSerializer(serializers.Serializer):
         if not data.get("message") and not data.get("template_name"):
             raise serializers.ValidationError("Either message (text) or template_name is required.")
         return data
+
+
+# ─── Bot / Chatbot Serializers ────────────────────────────────────────────────
+
+class ComplaintFeedbackSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    admission_number = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ComplaintFeedback
+        fields = [
+            "id",
+            "phone_number",
+            "student",
+            "student_name",
+            "class_name",
+            "admission_number",
+            "language",
+            "submission_type",
+            "category",
+            "message",
+            "status",
+            "admin_reply",
+            "resolved_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def get_student_name(self, obj):
+        if obj.student:
+            return obj.student.student_name
+        # Fallback to bot profile display name if available
+        try:
+            profile = BotUserProfile.objects.filter(phone_number=obj.phone_number).first()
+            if profile and profile.student:
+                return profile.student.student_name
+            if profile and profile.display_name:
+                return profile.display_name
+        except Exception:
+            pass
+        return obj.student_name or "WhatsApp User"
+
+    def get_class_name(self, obj):
+        student = obj.student
+        if not student:
+            try:
+                profile = BotUserProfile.objects.filter(phone_number=obj.phone_number).first()
+                if profile and profile.student:
+                    student = profile.student
+            except Exception:
+                pass
+        if student and student.school_class:
+            cls = student.school_class
+            return f"{cls.name} - {cls.section}" if cls.section else cls.name
+        return obj.class_name or "N/A"
+
+    def get_admission_number(self, obj):
+        student = obj.student
+        if not student:
+            try:
+                profile = BotUserProfile.objects.filter(phone_number=obj.phone_number).first()
+                if profile and profile.student:
+                    student = profile.student
+            except Exception:
+                pass
+        return student.parent_name if student else None
+
+
+class BotUserProfileSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BotUserProfile
+        fields = [
+            "id",
+            "phone_number",
+            "student",
+            "student_name",
+            "display_name",
+            "language",
+            "conversation_state",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def get_student_name(self, obj):
+        return obj.student.student_name if obj.student else obj.display_name
 

@@ -14,6 +14,7 @@ import { TemplatesPage } from './pages/TemplatesPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { CampaignDetailPage } from './pages/CampaignDetailPage';
 import { MessageLogsPage } from './pages/MessageLogsPage';
+import { ComplaintsFeedbackPage } from './pages/ComplaintsFeedbackPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 export function App() {
@@ -23,6 +24,7 @@ export function App() {
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
+  const [selectedLogCampaignId, setSelectedLogCampaignId] = useState(null);
   const [sendWorkflow, setSendWorkflow] = useState('FEES');
   const [sendStudentIds, setSendStudentIds] = useState(null);
   const [sendClassIds, setSendClassIds] = useState(null);
@@ -90,6 +92,9 @@ export function App() {
     if (tab === 'campaign-detail' && extra) {
       setSelectedCampaignId(extra);
       setActiveTab('campaign-detail');
+    } else if (tab === 'logs') {
+      setSelectedLogCampaignId(extra || null);
+      setActiveTab('logs');
     } else if (tab === 'send-message') {
       if (typeof extra === 'string') {
         setSendWorkflow(extra);
@@ -105,6 +110,7 @@ export function App() {
       }
       setActiveTab('send-message');
     } else {
+      if (tab !== 'logs') setSelectedLogCampaignId(null);
       setActiveTab(tab);
     }
   };
@@ -115,6 +121,8 @@ export function App() {
         return { title: 'Dashboard Overview', subtitle: 'Real-time overview of school messaging & broadcasts' };
       case 'send-message':
         return { title: 'Broadcast Messaging', subtitle: 'Send individual Meta WhatsApp messages to whole classes' };
+      case 'complaints-feedback':
+        return { title: 'Complaints & Feedback', subtitle: 'WhatsApp parent and student submissions, feedback, and issue tracking' };
       case 'students':
         return { title: 'Students Directory', subtitle: 'Manage student phone records and WhatsApp consent' };
       case 'classes':
@@ -196,6 +204,11 @@ export function App() {
               showToast={addToast}
             />
           )}
+          {activeTab === 'complaints-feedback' && (
+            <ComplaintsFeedbackPage
+              showToast={addToast}
+            />
+          )}
           {activeTab === 'students' && (
             <StudentsPage
               onNavigateToSendMessage={(navData) => handleNavigate('send-message', navData)}
@@ -218,6 +231,7 @@ export function App() {
             <CampaignsPage
               onNavigateToDetail={(id) => handleNavigate('campaign-detail', id)}
               onNavigateToSend={() => setActiveTab('send-message')}
+              onNavigateToLogsWithCampaign={(id) => handleNavigate('logs', id)}
               showToast={addToast}
             />
           )}
@@ -228,7 +242,13 @@ export function App() {
               showToast={addToast}
             />
           )}
-          {activeTab === 'logs' && <MessageLogsPage showToast={addToast} />}
+          {activeTab === 'logs' && (
+            <MessageLogsPage
+              key={selectedLogCampaignId || 'all-logs'}
+              initialCampaignId={selectedLogCampaignId}
+              showToast={addToast}
+            />
+          )}
           {activeTab === 'settings' && <SettingsPage showToast={addToast} />}
         </main>
       </div>

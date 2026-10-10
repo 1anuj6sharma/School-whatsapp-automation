@@ -897,13 +897,14 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
         </form>
       </Modal>
 
-      {/* Side Conversation Drawer */}
+      {/* Side Conversation Drawer (Read-only for Logs) */}
       <ConversationDrawer
         isOpen={!!activeConversation}
         onClose={() => setActiveConversation(null)}
         studentId={activeConversation?.studentId}
         phoneNumber={activeConversation?.phoneNumber}
         studentName={activeConversation?.studentName}
+        canSendMessage={false}
       />
     </div>
   );

@@ -18,6 +18,7 @@ all existing behaviour completely.
 import asyncio
 import os
 from typing import Optional
+from django.utils import timezone
 from asgiref.sync import async_to_sync
 from api.models import BotUserProfile, ComplaintFeedback, Student, ChatMessage
 from api.services.whatsapp_service import whatsapp_service
@@ -74,9 +75,20 @@ def _send_text_sync(phone: str, text: str, student: Optional[Student] = None) ->
 
 STRINGS = {
     "en": {
-        "greeting": (
+        "greeting_new": (
             "👋 Hello! Welcome to *{school_name}*.\n\n"
-            "Please choose your preferred language:\n\n"
+            "Please choose your preferred language:\n"
+            "कृपया अपनी पसंदीदा भाषा चुनें:\n\n"
+            "1️⃣  *English*\n"
+            "2️⃣  *हिंदी (Hindi)*"
+        ),
+        "welcome_back": (
+            "👋 Hello, *{name}*! Welcome to *{school_name}*."
+        ),
+        "lang_selection": (
+            "🌐 *Language Selection / भाषा चयन*\n\n"
+            "Please choose your preferred language:\n"
+            "कृपया अपनी पसंदीदा भाषा चुनें:\n\n"
             "1️⃣  *English*\n"
             "2️⃣  *हिंदी (Hindi)*"
         ),
@@ -86,7 +98,8 @@ STRINGS = {
             "Please choose an option:\n\n"
             "1️⃣  Complaint\n"
             "2️⃣  Feedback\n"
-            "3️⃣  Contact School"
+            "3️⃣  Contact School\n\n"
+            "_(Type *Change Language* anytime to switch language)_"
         ),
         "choose_category": (
             "Please choose a category for your *{type_label}*:\n\n"
@@ -101,7 +114,7 @@ STRINGS = {
         ),
         "saved": (
             "✅ Thank you, *{name}*! Your {type_label} has been recorded and will be reviewed shortly.\n\n"
-            "Reply with *Hi* anytime to submit another one."
+            "Reply with *Hi* anytime to open the main menu."
         ),
         "invalid_option": "❓ Sorry, I didn't understand that. Please send *1*, *2*, or *3* to choose an option.",
         "invalid_category": "❓ Please send *1*, *2*, *3*, or *4* to choose a category.",
@@ -123,9 +136,20 @@ STRINGS = {
         },
     },
     "hi": {
-        "greeting": (
+        "greeting_new": (
             "👋 नमस्ते! *{school_name}* में आपका स्वागत है।\n\n"
-            "कृपया अपनी पसंदीदा भाषा चुनें:\n\n"
+            "कृपया अपनी पसंदीदा भाषा चुनें:\n"
+            "Please choose your preferred language:\n\n"
+            "1️⃣  *English*\n"
+            "2️⃣  *हिंदी (Hindi)*"
+        ),
+        "welcome_back": (
+            "👋 नमस्ते, *{name}*! *{school_name}* में आपका स्वागत है।"
+        ),
+        "lang_selection": (
+            "🌐 *भाषा चयन / Language Selection*\n\n"
+            "कृपया अपनी पसंदीदा भाषा चुनें:\n"
+            "Please choose your preferred language:\n\n"
             "1️⃣  *English*\n"
             "2️⃣  *हिंदी (Hindi)*"
         ),
@@ -135,7 +159,8 @@ STRINGS = {
             "कृपया एक विकल्प चुनें:\n\n"
             "1️⃣  शिकायत (Complaint)\n"
             "2️⃣  सुझाव (Feedback)\n"
-            "3️⃣  स्कूल से संपर्क करें"
+            "3️⃣  स्कूल से संपर्क करें\n\n"
+            "_(भाषा बदलने के लिए कभी भी *Change Language* लिखें)_"
         ),
         "choose_category": (
             "कृपया अपनी *{type_label}* के लिए श्रेणी चुनें:\n\n"
@@ -150,7 +175,7 @@ STRINGS = {
         ),
         "saved": (
             "✅ धन्यवाद, *{name}*! आपकी {type_label} दर्ज कर ली गई है और जल्द ही इसकी समीक्षा की जाएगी।\n\n"
-            "दूसरी शिकायत/सुझाव के लिए *Hi* भेजें।"
+            "मुख्य मेनू के लिए *Hi* भेजें।"
         ),
         "invalid_option": "❓ क्षमा करें, मैं समझ नहीं पाया। कृपया *1*, *2* या *3* भेजें।",
         "invalid_category": "❓ कृपया श्रेणी चुनने के लिए *1*, *2*, *3* या *4* भेजें।",
@@ -208,11 +233,12 @@ def _get_student(phone: str) -> Optional[Student]:
     return student
 
 
-def _get_or_create_profile(phone: str, sender_name: Optional[str] = None) -> BotUserProfile:
+def _get_or_create_profile(phone: str, sender_name: Optional[str] = None):
     """
     Retrieve or create a BotUserProfile for the given phone number.
     Always tries to link to a Student and updates display_name if a student
     is now in the DB (handles future student additions).
+    Returns (profile, is_new).
     """
     student = _get_student(phone)
     profile, created = BotUserProfile.objects.get_or_create(
@@ -235,7 +261,6 @@ def _get_or_create_profile(phone: str, sender_name: Optional[str] = None) -> Bot
         profile.display_name = student.student_name
         changed = True
     elif student and profile.display_name != student.student_name:
-        # Student name may have been updated
         profile.display_name = student.student_name
         changed = True
     elif not student and sender_name and profile.display_name == "WhatsApp User":
@@ -245,7 +270,45 @@ def _get_or_create_profile(phone: str, sender_name: Optional[str] = None) -> Bot
     if changed:
         profile.save(update_fields=["student", "display_name", "updated_at"])
 
-    return profile
+    return profile, created
+
+
+def _is_change_language_intent(text: str) -> bool:
+    """
+    Detect if user wants to change/switch their language.
+    Supports English, Hindi (Devanagari), and Hinglish (mixed romanized Hindi).
+    """
+    if not text:
+        return False
+    t = text.strip().lower()
+
+    # Direct exact phrases
+    exact_matches = {
+        "change language", "language change", "switch language", "change lang",
+        "lang change", "language", "bhasha", "bhasa", "bhasha badlo", "bhasha badle",
+        "bhasha badlen", "bhasha badalna hai", "bhasha change", "bhasha change karo",
+        "bhasa change karo", "भाषा", "भाषा बदलो", "भाषा बदलें", "भाषा बदलनी है",
+        "भाषा परिवर्तन", "change to hindi", "change to english", "set language",
+        "select language", "choose language"
+    }
+    if t in exact_matches:
+        return True
+
+    # Substring / keyword patterns
+    intent_patterns = [
+        "change language", "language change", "switch language", "change lang", "lang change",
+        "change my language", "select language", "choose language", "set language",
+        "bhasha badl", "bhasa badl", "bhasha change", "bhasa change", "language badl",
+        "भाषा बदल", "भाषा चयन", "भाषा परिवर्तन", "भाषा बदलो",
+        "hindi me baat", "hindi mai baat", "english me baat", "english mai baat",
+        "hindi me karo", "english me karo", "hindi karo", "english karo",
+        "language switch", "switch to hindi", "switch to english"
+    ]
+    for pattern in intent_patterns:
+        if pattern in t:
+            return True
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -288,44 +351,79 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
         text_clean = (text or "").strip()
         text_lower = text_clean.lower()
 
-        profile = _get_or_create_profile(phone, sender_name)
+        profile, is_new = _get_or_create_profile(phone, sender_name)
+        student = profile.student
+        display_name = student.student_name if student else profile.display_name
 
-        # ── Reset on "hi" / "hello" regardless of state ──────────────────
-        if text_lower in ("hi", "hello", "helo", "hey", "namaste", "namasthe"):
-            profile.conversation_state = "INIT"
+        # ── 1. Check for explicit Language Change Intent (English/Hindi/Hinglish) ──
+        if _is_change_language_intent(text_lower):
+            logger.info(f"[BotService] User {phone} requested language change: '{text_clean}'")
+            profile.conversation_state = "AWAIT_LANG"
             profile.pending_type = None
             profile.pending_category = None
             profile.save(update_fields=["conversation_state", "pending_type", "pending_category", "updated_at"])
+            _send_text_sync(phone, _t(profile, "lang_selection"), student=student)
+            return
+
+        # ── 2. Greeting / Reset trigger ("hi", "hello", "namaste", "menu", etc.) ──
+        is_greeting = text_lower in (
+            "hi", "hello", "helo", "hey", "namaste", "namasthe", "start", "menu", "help",
+            "नमस्ते", "हाय", "हेलो", "प्रणाम"
+        )
+
+        if is_greeting:
+            # If user has ALREADY selected a language previously (not brand new / not in initial AWAIT_LANG)
+            # Use their known language directly and show Main Menu without re-asking for language!
+            if not is_new and profile.conversation_state not in ("INIT", "AWAIT_LANG"):
+                logger.info(f"[BotService] Existing user {phone} greeted with known language: {profile.language}")
+                profile.conversation_state = "MENU"
+                profile.pending_type = None
+                profile.pending_category = None
+                profile.save(update_fields=["conversation_state", "pending_type", "pending_category", "updated_at"])
+
+                # Send welcome back in their saved language + main menu
+                welcome = _t(profile, "welcome_back", name=display_name)
+                _send_text_sync(phone, welcome, student=student)
+                _send_text_sync(phone, _t(profile, "menu"), student=student)
+                return
+            else:
+                # Brand new user or pending language selection
+                profile.conversation_state = "INIT"
+                profile.pending_type = None
+                profile.pending_category = None
+                profile.save(update_fields=["conversation_state", "pending_type", "pending_category", "updated_at"])
 
         state = profile.conversation_state
 
-        # ── INIT ──────────────────────────────────────────────────────────
+        # ── INIT (Brand new user first greeting) ───────────────────────────
         if state == "INIT":
-            greeting = _t(profile, "greeting")
-            _send_text_sync(phone, greeting)
+            greeting = _t(profile, "greeting_new")
+            _send_text_sync(phone, greeting, student=student)
             profile.conversation_state = "AWAIT_LANG"
             profile.save(update_fields=["conversation_state", "updated_at"])
             return
 
-        # ── AWAIT_LANG ────────────────────────────────────────────────────
+        # ── AWAIT_LANG (User choosing language) ────────────────────────────
         if state == "AWAIT_LANG":
-            if text_lower in ("1", "english", "eng"):
+            if text_lower in ("1", "english", "eng", "इंग्लिश"):
                 profile.language = "en"
                 confirm = _t(profile, "lang_set")
-            elif text_lower in ("2", "hindi", "हिंदी", "hindi", "hin"):
+            elif text_lower in ("2", "hindi", "हिंदी", "hin", "हिन्दी"):
                 profile.language = "hi"
                 confirm = _t(profile, "lang_set")
             else:
-                # Re-prompt
-                _send_text_sync(phone, _t(profile, "greeting"))
+                # Re-prompt bilingual options
+                _send_text_sync(phone, _t(profile, "lang_selection"), student=student)
                 return
 
-            profile.save(update_fields=["language", "updated_at"])
-            _send_text_sync(phone, confirm)
-            # Show main menu immediately after language confirmation
-            _send_text_sync(phone, _t(profile, "menu"))
             profile.conversation_state = "MENU"
-            profile.save(update_fields=["conversation_state", "updated_at"])
+            profile.pending_type = None
+            profile.pending_category = None
+            profile.save(update_fields=["language", "conversation_state", "pending_type", "pending_category", "updated_at"])
+
+            _send_text_sync(phone, confirm, student=student)
+            # Show main menu immediately in the chosen language
+            _send_text_sync(phone, _t(profile, "menu"), student=student)
             return
 
         # ── MENU ──────────────────────────────────────────────────────────
@@ -333,16 +431,15 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
             choice = MENU_MAP.get(text_clean) or MENU_MAP.get(text_lower)
             if choice is None:
                 # Try natural language match
-                if any(w in text_lower for w in ("complaint", "shikayat", "शिकायत")):
+                if any(w in text_lower for w in ("complaint", "shikayat", "शिकायत", "sikayat")):
                     choice = "COMPLAINT"
-                elif any(w in text_lower for w in ("feedback", "sujhav", "सुझाव", "suggestion")):
+                elif any(w in text_lower for w in ("feedback", "sujhav", "सुझाव", "suggestion", "sujhav")):
                     choice = "FEEDBACK"
-                elif any(w in text_lower for w in ("contact", "school", "संपर्क")):
+                elif any(w in text_lower for w in ("contact", "school", "संपर्क", "call", "phone")):
                     choice = "CONTACT"
 
             if choice == "CONTACT":
-                _send_text_sync(phone, _t(profile, "contact_school"))
-                # Stay in MENU state so user can come back
+                _send_text_sync(phone, _t(profile, "contact_school"), student=student)
                 return
 
             if choice in ("COMPLAINT", "FEEDBACK"):
@@ -351,13 +448,14 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
                 profile.save(update_fields=["pending_type", "conversation_state", "updated_at"])
                 _send_text_sync(
                     phone,
-                    _t(profile, "choose_category", type_label=_type_label(profile, choice))
+                    _t(profile, "choose_category", type_label=_type_label(profile, choice)),
+                    student=student,
                 )
                 return
 
-            # Unrecognised
-            _send_text_sync(phone, _t(profile, "invalid_option"))
-            _send_text_sync(phone, _t(profile, "menu"))
+            # Unrecognised option
+            _send_text_sync(phone, _t(profile, "invalid_option"), student=student)
+            _send_text_sync(phone, _t(profile, "menu"), student=student)
             return
 
         # ── AWAIT_CATEGORY ────────────────────────────────────────────────
@@ -366,17 +464,19 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
             if category is None:
                 # Natural language match
                 lower = text_lower
-                if any(w in lower for w in ("study", "padhai", "पढ़ाई", "education", "class")):
+                if any(w in lower for w in ("study", "padhai", "पढ़ाई", "education", "class", "homework")):
                     category = "STUDY"
-                elif any(w in lower for w in ("school", "स्कूल", "building", "facility")):
+                elif any(w in lower for w in ("school", "स्कूल", "building", "facility", "bus")):
                     category = "SCHOOL"
-                elif any(w in lower for w in ("teacher", "शिक्षक", "sir", "ma'am", "mam")):
+                elif any(w in lower for w in ("teacher", "शिक्षक", "sir", "ma'am", "mam", "adityasir")):
                     category = "TEACHER"
+                elif any(w in lower for w in ("other", "अन्य", "kuch aur", "dusra")):
+                    category = "OTHER"
                 else:
                     category = None
 
             if category is None:
-                _send_text_sync(phone, _t(profile, "invalid_category"))
+                _send_text_sync(phone, _t(profile, "invalid_category"), student=student)
                 return
 
             profile.pending_category = category
@@ -391,20 +491,27 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
                     "type_your_message",
                     category_label=_category_label(profile, category),
                     type_label=_type_label(profile, pending_type),
-                )
+                ),
+                student=student,
             )
             return
 
         # ── AWAIT_MESSAGE ─────────────────────────────────────────────────
         if state == "AWAIT_MESSAGE":
             if not text_clean:
-                _send_text_sync(phone, _t(profile, "type_your_message",
-                    category_label=_category_label(profile, profile.pending_category or "OTHER"),
-                    type_label=_type_label(profile, profile.pending_type or "COMPLAINT")))
+                _send_text_sync(
+                    phone,
+                    _t(
+                        profile,
+                        "type_your_message",
+                        category_label=_category_label(profile, profile.pending_category or "OTHER"),
+                        type_label=_type_label(profile, profile.pending_type or "COMPLAINT"),
+                    ),
+                    student=student,
+                )
                 return
 
-            student = profile.student
-            student_name_snap = student.student_name if student else profile.display_name
+            student_name_snap = display_name
             class_name_snap = ""
             if student and student.school_class:
                 cls = student.school_class
@@ -429,7 +536,7 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
             gemini_ack = None
             if os.getenv("GEMINI_API_KEY", "").strip():
                 prompt = (
-                    f"A student/parent sent this {profile.pending_type.lower()} via WhatsApp: "
+                    f"A student/parent named {student_name_snap} sent this {profile.pending_type.lower()} via WhatsApp: "
                     f"\"{text_clean}\". Write a warm, concise (2-3 sentence) acknowledgement "
                     f"in {'English' if profile.language == 'en' else 'Hindi'} that their "
                     f"{profile.pending_type.lower()} has been received and will be reviewed. "
@@ -438,11 +545,12 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
                 gemini_ack = _gemini_reply(prompt)
 
             ack_text = gemini_ack or _t(
-                profile, "saved",
+                profile,
+                "saved",
                 name=student_name_snap,
                 type_label=_type_label(profile, profile.pending_type or "COMPLAINT"),
             )
-            _send_text_sync(phone, ack_text)
+            _send_text_sync(phone, ack_text, student=student)
 
             # Reset state to MENU for the next round
             profile.conversation_state = "MENU"
@@ -452,11 +560,12 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
             return
 
         # ── Fallback — unknown state ───────────────────────────────────────
-        logger.warning(f"[BotService] Unknown state '{state}' for {phone}. Resetting to INIT.")
-        profile.conversation_state = "INIT"
+        logger.warning(f"[BotService] Unknown state '{state}' for {phone}. Resetting to MENU or INIT.")
+        profile.conversation_state = "MENU" if not is_new else "INIT"
         profile.pending_type = None
         profile.pending_category = None
         profile.save(update_fields=["conversation_state", "pending_type", "pending_category", "updated_at"])
 
     except Exception as exc:
         logger.error(f"[BotService] Unhandled exception for {phone}: {exc}", exc_info=True)
+

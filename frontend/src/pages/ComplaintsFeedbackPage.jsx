@@ -27,6 +27,7 @@ import {
   Inbox
 } from 'lucide-react';
 import { api } from '../services/api';
+import { ConversationDrawer } from '../components/ConversationDrawer';
 
 export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) {
   // Data states
@@ -63,6 +64,17 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
   const [adminReplyText, setAdminReplyText] = useState('');
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+
+  // Chat Conversation Drawer state
+  const [activeConversation, setActiveConversation] = useState(null);
+
+  const handleOpenConversation = (item) => {
+    setActiveConversation({
+      studentId: item.student || item.student_id,
+      phoneNumber: item.phone_number,
+      studentName: item.student_name || 'WhatsApp User',
+    });
+  };
 
   // Debounce search
   useEffect(() => {
@@ -131,8 +143,12 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
   }, [fetchData]);
 
   // Update status or reply
-  const handleUpdateStatus = async (item, newStatus, reply = null) => {
+  const handleUpdateStatus = async (item, newStatus, reply = null, shouldClose = false) => {
     setUpdatingStatus(true);
+    if (shouldClose) {
+      setSelectedItem(null);
+      setAdminReplyText('');
+    }
     try {
       const payload = { status: newStatus };
       if (reply !== null) {
@@ -140,13 +156,13 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
       }
       const updated = await api.updateComplaintFeedback(item.id, payload);
       setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...updated } : it)));
-      if (selectedItem?.id === item.id) {
-        setSelectedItem((prev) => ({ ...prev, ...updated }));
+      if (!shouldClose) {
+        setSelectedItem((prev) => (prev && prev.id === item.id ? { ...prev, ...updated } : null));
       }
       showToast?.({
         type: 'success',
-        title: 'Updated Successfully',
-        message: `Status set to ${newStatus}.`,
+        title: 'Saved Successfully',
+        message: 'Record updated successfully.',
       });
       fetchData(true);
     } catch (err) {
@@ -525,7 +541,10 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
                     <tr
                       key={item.id}
                       className="hover:bg-slate-50/80 transition-colors group cursor-pointer"
-                      onClick={() => setSelectedItem(item)}
+                      onClick={() => {
+                        setSelectedItem(item);
+                        setAdminReplyText(item.admin_reply || '');
+                      }}
                     >
                       {/* User & Student */}
                       <td className="px-4 py-3.5">
@@ -607,7 +626,18 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
                       <td className="px-4 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
                           <button
-                            onClick={() => setSelectedItem(item)}
+                            onClick={() => handleOpenConversation(item)}
+                            title="Open WhatsApp Chat Conversation"
+                            className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-200/80 hover:border-emerald-600 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs group"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-600 group-hover:text-white transition-colors" />
+                            <span>Chat</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setSelectedItem(item);
+                              setAdminReplyText(item.admin_reply || '');
+                            }}
                             title="View Full Details"
                             className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
                           >
@@ -793,7 +823,8 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
                       handleUpdateStatus(
                         selectedItem,
                         'PENDING',
-                        adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply
+                        adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply,
+                        false
                       )
                     }
                     disabled={updatingStatus}
@@ -812,7 +843,8 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
                       handleUpdateStatus(
                         selectedItem,
                         'IN_REVIEW',
-                        adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply
+                        adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply,
+                        false
                       )
                     }
                     disabled={updatingStatus}
@@ -831,7 +863,8 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
                       handleUpdateStatus(
                         selectedItem,
                         'RESOLVED',
-                        adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply
+                        adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply,
+                        false
                       )
                     }
                     disabled={updatingStatus}
@@ -860,6 +893,17 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
 
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
+                  onClick={() => {
+                    handleOpenConversation(selectedItem);
+                    setSelectedItem(null);
+                  }}
+                  className="px-3.5 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors flex items-center gap-1.5"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Open Live Chat</span>
+                </button>
+                <button
                   onClick={() => {
                     setSelectedItem(null);
                     setAdminReplyText('');
@@ -873,13 +917,14 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
                     handleUpdateStatus(
                       selectedItem,
                       selectedItem.status,
-                      adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply
+                      adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply,
+                      true
                     );
-                    setSelectedItem(null);
                   }}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-colors"
+                  disabled={updatingStatus}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-colors disabled:opacity-50"
                 >
-                  Save Notes
+                  {updatingStatus ? 'Saving...' : 'Save Notes'}
                 </button>
               </div>
             </div>
@@ -917,6 +962,16 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
           </div>
         </div>
       )}
+
+      {/* ─── Side Conversation Drawer ───────────────────────────────────── */}
+      <ConversationDrawer
+        isOpen={!!activeConversation}
+        onClose={() => setActiveConversation(null)}
+        studentId={activeConversation?.studentId}
+        phoneNumber={activeConversation?.phoneNumber}
+        studentName={activeConversation?.studentName}
+        canSendMessage={true}
+      />
     </div>
   );
 }

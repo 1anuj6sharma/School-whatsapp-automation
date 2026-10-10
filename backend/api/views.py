@@ -3,6 +3,7 @@ import io
 import uuid
 from pathlib import Path
 import asyncio
+from asgiref.sync import async_to_sync
 import pandas as pd
 from datetime import datetime
 from django.conf import settings
@@ -1324,14 +1325,17 @@ class ConversationSendMessageView(APIView):
 
         if template_name:
             tpl = MessageTemplate.objects.filter(name=template_name).first()
-            result = asyncio.run(
-                whatsapp_service.send_template_message(
+            try:
+                result = async_to_sync(whatsapp_service.send_template_message)(
                     recipient_number=clean_phone,
                     template_name=template_name,
                     language_code=tpl.language if tpl else language_code,
                     parameters=parameters,
                 )
-            )
+            except Exception as exc:
+                logger.error(f"[ConversationSendMessage] Template send exception: {exc}", exc_info=True)
+                result = {"success": False, "error": str(exc)}
+
             wamid = result.get("message_id")
             succ = result.get("success", False)
             body_text = tpl.body_preview if tpl else f"Template: {template_name}"
@@ -1365,12 +1369,15 @@ class ConversationSendMessageView(APIView):
                 "error": result.get("error"),
             })
         else:
-            result = asyncio.run(
-                whatsapp_service.send_text_message(
+            try:
+                result = async_to_sync(whatsapp_service.send_text_message)(
                     recipient_number=clean_phone,
                     message_text=text_message,
                 )
-            )
+            except Exception as exc:
+                logger.error(f"[ConversationSendMessage] Text send exception: {exc}", exc_info=True)
+                result = {"success": False, "error": str(exc)}
+
             wamid = result.get("message_id")
             succ = result.get("success", False)
 

@@ -10,6 +10,11 @@ import {
   User,
   Phone,
   Sparkles,
+  Send,
+  Loader2,
+  ChevronDown,
+  FileText,
+  AlertTriangle,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -19,12 +24,21 @@ export const ConversationDrawer = ({
   studentId,
   phoneNumber,
   studentName: initialStudentName,
+  canSendMessage = false,
 }) => {
   const [loading, setLoading] = useState(true);
   const [conversation, setConversation] = useState(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [inputMessage, setInputMessage] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const textareaRef = useRef(null);
 
   const identifier = studentId || phoneNumber;
 
@@ -44,6 +58,7 @@ export const ConversationDrawer = ({
   useEffect(() => {
     if (isOpen && identifier) {
       fetchConversation(true);
+      setSendError('');
       // Auto-poll conversation updates every 4 seconds
       const interval = setInterval(() => {
         fetchConversation(false);
@@ -69,6 +84,20 @@ export const ConversationDrawer = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  // Load templates when toggled
+  useEffect(() => {
+    if (showTemplates && templates.length === 0) {
+      setLoadingTemplates(true);
+      api.getTemplates()
+        .then((res) => {
+          const list = Array.isArray(res) ? res : res.results || [];
+          setTemplates(list.filter((t) => (t.status || '').toUpperCase() === 'APPROVED'));
+        })
+        .catch((err) => console.error('Failed to load templates:', err))
+        .finally(() => setLoadingTemplates(false));
+    }
+  }, [showTemplates, templates.length]);
+
   if (!isOpen) return null;
 
   const student = conversation?.student;
@@ -77,10 +106,82 @@ export const ConversationDrawer = ({
   const messages = rawMessages.filter((msg) => {
     if (msg.direction === 'INBOUND') return true;
     const st = (msg.status || '').toUpperCase();
-    return st === 'DELIVERED' || st === 'READ';
+    return st === 'DELIVERED' || st === 'READ' || st === 'SENT';
   });
   const displayName = student?.student_name || conversation?.recipient_name || initialStudentName || 'User Conversation';
   const displayPhone = student?.whatsapp_number || conversation?.phone_number || phoneNumber || '';
+
+  const handleSendMessage = async (e) => {
+    if (e) e.preventDefault();
+    const text = inputMessage.trim();
+    if (!text || sending) return;
+
+    setSending(true);
+    setSendError('');
+    try {
+      const payload = {
+        phone_number: displayPhone,
+        student_id: student?.id || studentId || null,
+        message: text,
+      };
+      const res = await api.sendConversationMessage(payload);
+      if (res && res.success !== false) {
+        setInputMessage('');
+        await fetchConversation(false);
+        setTimeout(() => {
+          if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+          }
+        }, 150);
+      } else {
+        const errMsg = res?.error || 'Failed to send WhatsApp message.';
+        setSendError(errMsg);
+      }
+    } catch (err) {
+      console.error('Error sending message:', err);
+      setSendError(err.message || 'Failed to send message.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSendTemplate = async (tpl) => {
+    if (!tpl || sending) return;
+    setSending(true);
+    setSendError('');
+    try {
+      const payload = {
+        phone_number: displayPhone,
+        student_id: student?.id || studentId || null,
+        template_name: tpl.name,
+        language_code: tpl.language || 'en_US',
+      };
+      const res = await api.sendConversationMessage(payload);
+      if (res && res.success !== false) {
+        setShowTemplates(false);
+        await fetchConversation(false);
+        setTimeout(() => {
+          if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+          }
+        }, 150);
+      } else {
+        setSendError(res?.error || 'Failed to send template message.');
+      }
+    } catch (err) {
+      console.error('Error sending template:', err);
+      setSendError(err.message || 'Failed to send template message.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
 
   // Helper to render message status ticks
   const renderStatus = (msg) => {
@@ -220,8 +321,8 @@ export const ConversationDrawer = ({
                   <MessageSquare className="w-6 h-6" />
                 </div>
                 <h4 className="text-sm font-bold text-slate-800 mb-1">No conversation history yet</h4>
-                <p className="text-xs text-slate-500 max-w-xs">
-                  Sent broadcast messages and parent replies for {displayName} will be stored and displayed here automatically.
+                <p className="text-xs text-slate-500 max-w-xs mb-3">
+                  Send a WhatsApp message or template below to start the conversation with {displayName}.
                 </p>
               </div>
             ) : (
@@ -311,16 +412,134 @@ export const ConversationDrawer = ({
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Footer note */}
-          <div className="px-4 py-2.5 bg-white border-t border-slate-200 shrink-0 text-center">
-            <p className="text-[11px] text-slate-400 font-medium">
-              Live conversation thread synchronized with WhatsApp Cloud API & Webhooks.
-            </p>
-          </div>
+          {/* Conditional Messaging or Read-only Footer */}
+          {canSendMessage ? (
+            <>
+              {/* Template Selection Overlay / Dropdown */}
+              {showTemplates && (
+                <div className="bg-slate-50 border-t border-slate-200 p-3 max-h-60 overflow-y-auto space-y-2">
+                  <div className="flex items-center justify-between pb-1 border-b border-slate-200 text-xs font-semibold text-slate-700">
+                    <span className="flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                      Select Approved WhatsApp Template
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowTemplates(false)}
+                      className="text-slate-400 hover:text-slate-600 p-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  {loadingTemplates ? (
+                    <div className="py-4 text-center text-xs text-slate-500">
+                      <Loader2 className="w-4 h-4 animate-spin inline mr-1 text-emerald-600" /> Loading templates...
+                    </div>
+                  ) : templates.length === 0 ? (
+                    <div className="py-3 text-center text-xs text-slate-500">
+                      No approved templates found. You can send direct text messages below.
+                    </div>
+                  ) : (
+                    templates.map((tpl) => (
+                      <div
+                        key={tpl.id || tpl.name}
+                        className="p-2.5 bg-white rounded-xl border border-slate-200 hover:border-emerald-300 hover:shadow-xs transition-all cursor-pointer flex items-center justify-between gap-2"
+                        onClick={() => handleSendTemplate(tpl)}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-800 font-mono">{tpl.name}</div>
+                          <div className="text-[11px] text-slate-500 truncate">{tpl.body_preview || tpl.category}</div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={sending}
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white transition-colors shrink-0"
+                        >
+                          Send
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Send Error Notice */}
+              {sendError && (
+                <div className="px-4 py-2 bg-rose-50 border-t border-rose-200 flex items-center justify-between text-xs text-rose-700">
+                  <div className="flex items-center gap-2 truncate">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                    <span className="truncate">{sendError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSendError('')}
+                    className="text-rose-500 hover:text-rose-700 p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* Interactive Chat Input Area */}
+              <div className="p-3 sm:p-4 bg-white border-t border-slate-200 shrink-0">
+                <div className="flex items-center justify-between mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTemplates(!showTemplates)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                      showTemplates
+                        ? 'bg-emerald-100 text-emerald-800 font-semibold'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                    {showTemplates ? 'Hide Templates' : 'Templates'}
+                  </button>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {inputMessage.length > 0 ? `${inputMessage.length} chars` : 'Enter ↵ to send'}
+                  </span>
+                </div>
+
+                <form onSubmit={handleSendMessage} className="flex items-end gap-2">
+                  <div className="flex-1 relative">
+                    <textarea
+                      ref={textareaRef}
+                      value={inputMessage}
+                      onChange={(e) => setInputMessage(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={`Type a WhatsApp message to ${displayName}...`}
+                      rows={2}
+                      disabled={sending}
+                      className="w-full resize-none px-3.5 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 placeholder-slate-400 transition-all"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={sending || !inputMessage.trim()}
+                    className="p-3 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 transition-all shadow-md shadow-emerald-600/20 shrink-0 flex items-center justify-center"
+                    title="Send WhatsApp Message"
+                  >
+                    {sending ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Send className="w-5 h-5" />
+                    )}
+                  </button>
+                </form>
+              </div>
+            </>
+          ) : (
+            /* Read-only Footer Note for Message Logs */
+            <div className="px-4 py-3 bg-white border-t border-slate-200 shrink-0 text-center">
+              <p className="text-[11px] text-slate-400 font-medium">
+                Live conversation thread synchronized with WhatsApp Cloud API & Webhooks.
+              </p>
+            </div>
+          )}
 
         </div>
       </div>
     </div>
   );
 };
-

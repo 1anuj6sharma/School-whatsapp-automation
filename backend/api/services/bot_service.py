@@ -347,6 +347,12 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
     It must NEVER raise an exception — all errors are caught and logged.
     """
     try:
+        from django.conf import settings
+        bot_enabled = getattr(settings, "WHATSAPP_BOT_ENABLED", False) or os.getenv("WHATSAPP_BOT_ENABLED", "False").lower() in ("true", "1", "yes")
+        if not bot_enabled:
+            logger.info(f"[BotService] Bot is currently DISABLED (WHATSAPP_BOT_ENABLED=False). Skipping incoming message from {phone}.")
+            return
+
         phone = sanitize_phone_number(phone)
         text_clean = (text or "").strip()
         text_lower = text_clean.lower()

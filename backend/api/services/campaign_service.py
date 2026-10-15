@@ -139,10 +139,34 @@ class CampaignService:
                 )
             )
 
+        @sync_to_async
+        def get_template_info():
+            tpl = MessageTemplate.objects.filter(name=template_name).first()
+            var_mappings = None
+            body_preview = f"Template: {template_name}"
+            sample_img = None
+            if tpl:
+                body_preview = tpl.body_preview or body_preview
+                if (tpl.header_type or "").upper() == "IMAGE":
+                    sample_img = tpl.sample_image_url
+                if tpl.variable_mappings:
+                    if isinstance(tpl.variable_mappings, dict):
+                        sorted_keys = sorted(
+                            tpl.variable_mappings.keys(),
+                            key=lambda x: int(x) if str(x).isdigit() else str(x),
+                        )
+                        var_mappings = [tpl.variable_mappings[k] for k in sorted_keys]
+                    elif isinstance(tpl.variable_mappings, list):
+                        var_mappings = tpl.variable_mappings
+            return var_mappings, body_preview, sample_img
+
         queued_logs = await get_queued_logs()
         if not queued_logs:
             logger.info(f"[CampaignService] No queued logs found for Campaign #{campaign_id}.")
             return
+
+        tpl_var_mappings, tpl_body_preview, tpl_sample_img = await get_template_info()
+        base_dyn_params = dynamic_parameters or tpl_var_mappings
 
         concurrency = getattr(settings, "WHATSAPP_MAX_CONCURRENCY", 5)
         semaphore = asyncio.Semaphore(concurrency)
@@ -153,12 +177,13 @@ class CampaignService:
                     student_id = log_item.student_id
                     masked_num = mask_phone_number(log_item.recipient_number)
 
+                    effective_dyn_params = base_dyn_params
                     params = None
                     if per_student_parameters and (
                         str(student_id) in per_student_parameters or student_id in per_student_parameters
                     ):
                         params = per_student_parameters.get(str(student_id)) or per_student_parameters.get(student_id)
-                    elif dynamic_parameters:
+                    elif effective_dyn_params:
                         student = log_item.student
                         p_name = (student.parent_name if student and student.parent_name else "Parent").strip()
                         s_name = (student.student_name if student and student.student_name else "Student").strip()
@@ -176,7 +201,7 @@ class CampaignService:
                             c_name = ""
 
                         resolved_list = []
-                        for param_str in dynamic_parameters:
+                        for param_str in effective_dyn_params:
                             p_val = str(param_str)
                             p_val = p_val.replace("{Parent Name}", p_name).replace("{{Parent Name}}", p_name)
                             p_val = p_val.replace("{parent_name}", p_name).replace("{{parent_name}}", p_name)
@@ -218,13 +243,12 @@ class CampaignService:
                         log_rec.save()
 
                         try:
-                            tpl = MessageTemplate.objects.filter(name=template_name).first()
-                            body_preview = tpl.body_preview if tpl else f"Template: {template_name}"
+                            body_preview = tpl_body_preview
                             if body_preview and params:
                                 for idx, val in enumerate(params, start=1):
                                     body_preview = body_preview.replace(f"{{{{{idx}}}}}", str(val)).replace(f"{{{idx}}}", str(val))
 
-                            media_img = header_image_url or (tpl.sample_image_url if tpl and (tpl.header_type or "").upper() == "IMAGE" else None)
+                            media_img = header_image_url or tpl_sample_img
 
                             ChatMessage.objects.create(
                                 student=log_rec.student,

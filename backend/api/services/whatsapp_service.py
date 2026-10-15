@@ -521,10 +521,11 @@ class WhatsAppService:
 
                     if response.status_code in (429, 500, 502, 503, 504) and retry_count < max_retries:
                         retry_count += 1
+                        actual_delay = max(backoff_delay, 4.0) if response.status_code == 429 else backoff_delay
                         logger.warning(
-                            f"[WhatsAppService] HTTP {response.status_code} for {masked}. Retrying in {backoff_delay}s..."
+                            f"[WhatsAppService] HTTP {response.status_code} for {masked}. Retrying in {actual_delay}s..."
                         )
-                        await asyncio.sleep(backoff_delay)
+                        await asyncio.sleep(actual_delay)
                         backoff_delay *= 2
                         continue
 

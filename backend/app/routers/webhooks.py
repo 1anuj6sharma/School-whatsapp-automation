@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,10 @@ async def handle_whatsapp_events(request: Request, db: AsyncSession = Depends(ge
     """
     try:
         data = await request.json()
+        try:
+            logger.info(f"[Webhook] Raw payload received: {json.dumps(data, default=str)}")
+        except Exception:
+            logger.info(f"[Webhook] Raw payload received (fallback): {data}")
     except Exception as ex:
         logger.error(f"[Webhook] Failed to parse incoming JSON payload: {str(ex)}")
         return {"status": "ignored", "reason": "Invalid JSON"}
@@ -68,9 +73,34 @@ async def handle_whatsapp_events(request: Request, db: AsyncSession = Depends(ge
                 stmt = select(MessageLog).where(MessageLog.whatsapp_message_id == message_id)
                 result = await db.execute(stmt)
                 log_entry = result.scalar_one_or_none()
+                recipient_info = log_entry.recipient_number if log_entry else "Unknown"
 
-                if log_entry:
-                    # Update status and appropriate timestamp
+                if new_status == "FAILED":
+                    errors = status_item.get("errors", [])
+                    err_str = "Unknown Meta error"
+                    if errors:
+                        first_err = errors[0]
+                        err_code = first_err.get("code", "")
+                        err_title = first_err.get("title", "")
+                        err_msg = first_err.get("message", "")
+                        err_details = first_err.get("error_data", {}).get("details", "")
+                        err_str = f"Meta error: {err_title} - {err_msg}"
+                        if err_code:
+                            err_str = f"Meta error [{err_code}]: {err_title} - {err_msg}"
+                        if err_details:
+                            err_str += f" ({err_details})"
+                    logger.error(
+                        f"[Webhook] DELIVERY FAILED for message ID '{message_id}' (Recipient: {recipient_info}): {err_str}"
+                    )
+                    if log_entry:
+                        log_entry.status = "FAILED"
+                        log_entry.failed_at = event_time
+                        log_entry.error_message = err_str
+                        await db.commit()
+                elif log_entry:
+                    logger.info(
+                        f"[Webhook] Status update for message ID '{message_id}' (Recipient: {recipient_info}): {new_status}"
+                    )
                     if new_status == "SENT":
                         log_entry.status = "SENT"
                         if not log_entry.sent_at:
@@ -81,17 +111,11 @@ async def handle_whatsapp_events(request: Request, db: AsyncSession = Depends(ge
                     elif new_status == "READ":
                         log_entry.status = "READ"
                         log_entry.read_at = event_time
-                    elif new_status == "FAILED":
-                        log_entry.status = "FAILED"
-                        log_entry.failed_at = event_time
-                        errors = status_item.get("errors", [])
-                        if errors:
-                            first_err = errors[0]
-                            log_entry.error_message = (
-                                f"Meta error: {first_err.get('title', '')} - {first_err.get('message', '')}"
-                            )
-
                     await db.commit()
+                else:
+                    logger.info(
+                        f"[Webhook] Status update for unknown message ID '{message_id}': {new_status}"
+                    )
 
             # Handle template review status updates
             field = change.get("field")

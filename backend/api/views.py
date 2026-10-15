@@ -1,11 +1,12 @@
 import os
 import io
+import json
 import uuid
 from pathlib import Path
 import asyncio
 from asgiref.sync import async_to_sync
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 from django.conf import settings
 from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
@@ -947,184 +948,226 @@ class WhatsAppWebhookView(APIView):
         return HttpResponse("Verification token mismatch", status=403)
 
     def post(self, request):
-        data = request.data
-        entries = data.get("entry", [])
-        for entry in entries:
-            changes = entry.get("changes", [])
-            for change in changes:
-                value = change.get("value", {})
+        try:
+            data = request.data
+            try:
+                logger.info(f"[Webhook] Raw payload received: {json.dumps(data, default=str)}")
+            except Exception as log_ex:
+                logger.info(f"[Webhook] Raw payload received (fallback): {data}")
+            entries = data.get("entry", [])
+            for entry in entries:
+                changes = entry.get("changes", [])
+                for change in changes:
+                    value = change.get("value", {})
 
-                # 1. Process Status Updates (SENT, DELIVERED, READ, FAILED)
-                statuses = value.get("statuses", [])
-                for status_item in statuses:
-                    message_id = status_item.get("id")
-                    new_status = status_item.get("status", "").upper()
-                    timestamp_str = status_item.get("timestamp")
-                    event_time = (
-                        datetime.utcfromtimestamp(int(timestamp_str))
-                        if timestamp_str and timestamp_str.isdigit()
-                        else timezone.now()
-                    )
+                    # 1. Process Status Updates (SENT, DELIVERED, READ, FAILED)
+                    statuses = value.get("statuses", [])
+                    for status_item in statuses:
+                        message_id = status_item.get("id")
+                        new_status = status_item.get("status", "").upper()
+                        timestamp_str = status_item.get("timestamp")
+                        event_time = (
+                            datetime.fromtimestamp(int(timestamp_str), tz=dt_timezone.utc)
+                            if timestamp_str and timestamp_str.isdigit()
+                            else timezone.now()
+                        )
 
-                    if not message_id:
-                        continue
+                        if not message_id:
+                            continue
 
-                    log_entry = MessageLog.objects.filter(whatsapp_message_id=message_id).first()
-                    if log_entry:
-                        if new_status == "SENT":
-                            log_entry.status = "SENT"
-                            if not log_entry.sent_at:
-                                log_entry.sent_at = event_time
-                        elif new_status == "DELIVERED":
-                            log_entry.status = "DELIVERED"
-                            log_entry.delivered_at = event_time
-                        elif new_status == "READ":
-                            log_entry.status = "READ"
-                            log_entry.read_at = event_time
-                        elif new_status == "FAILED":
-                            log_entry.status = "FAILED"
-                            log_entry.failed_at = event_time
+                        log_entry = MessageLog.objects.filter(whatsapp_message_id=message_id).first()
+                        recipient_info = log_entry.recipient_number if log_entry else "Unknown"
+
+                        if new_status == "FAILED":
                             errors = status_item.get("errors", [])
+                            err_str = "Unknown Meta error"
                             if errors:
                                 first_err = errors[0]
-                                log_entry.error_message = (
-                                    f"Meta error: {first_err.get('title', '')} - {first_err.get('message', '')}"
-                                )
-                        log_entry.save()
-
-                    # Update ChatMessage status if mirrored
-                    ChatMessage.objects.filter(whatsapp_message_id=message_id).update(status=new_status)
-
-                # 2. Process Incoming User Messages (Inbound replies)
-                messages = value.get("messages", [])
-                contacts = value.get("contacts", [])
-
-                contacts_map = {}
-                for c in contacts:
-                    wa_id = c.get("wa_id")
-                    name = c.get("profile", {}).get("name")
-                    if wa_id and name:
-                        contacts_map[wa_id] = name
-
-                for msg_item in messages:
-                    msg_from = msg_item.get("from", "")
-                    wamid = msg_item.get("id")
-                    msg_type = msg_item.get("type", "text")
-                    timestamp_str = msg_item.get("timestamp")
-                    event_time = (
-                        datetime.utcfromtimestamp(int(timestamp_str))
-                        if timestamp_str and timestamp_str.isdigit()
-                        else timezone.now()
-                    )
-
-                    if not msg_from:
-                        continue
-
-                    clean_phone = sanitize_phone_number(msg_from)
-                    sender_name = contacts_map.get(msg_from) or contacts_map.get(clean_phone)
-
-                    extracted_text = ""
-                    media_url = None
-                    if msg_type == "text":
-                        extracted_text = msg_item.get("text", {}).get("body", "")
-                    elif msg_type == "interactive":
-                        interactive = msg_item.get("interactive", {})
-                        btn = interactive.get("button_reply", {})
-                        lst = interactive.get("list_reply", {})
-                        extracted_text = btn.get("title") or lst.get("title") or "[Interactive Reply]"
-                    elif msg_type == "button":
-                        extracted_text = msg_item.get("button", {}).get("text", "[Button Click]")
-                    elif msg_type == "image":
-                        caption = msg_item.get("image", {}).get("caption", "")
-                        extracted_text = f"📷 Photo: {caption}" if caption else "📷 Photo"
-                    elif msg_type == "document":
-                        filename = msg_item.get("document", {}).get("filename", "")
-                        extracted_text = f"📄 Document: {filename}" if filename else "📄 Document"
-                    elif msg_type in ("audio", "voice"):
-                        extracted_text = "🎵 Voice Note / Audio"
-                    elif msg_type == "video":
-                        caption = msg_item.get("video", {}).get("caption", "")
-                        extracted_text = f"🎥 Video: {caption}" if caption else "🎥 Video"
-                    elif msg_type == "location":
-                        loc = msg_item.get("location", {})
-                        loc_name = loc.get("name") or loc.get("address") or f"{loc.get('latitude')}, {loc.get('longitude')}"
-                        extracted_text = f"📍 Location: {loc_name}"
-                    elif msg_type == "reaction":
-                        emoji = msg_item.get("reaction", {}).get("emoji", "")
-                        extracted_text = f"Reacted: {emoji}"
-                    else:
-                        extracted_text = f"[{msg_type.capitalize()} message]"
-
-                    # Match student
-                    student = Student.objects.filter(whatsapp_number=clean_phone).first()
-                    if not student and len(clean_phone) >= 10:
-                        student = Student.objects.filter(whatsapp_number__endswith=clean_phone[-10:]).first()
-
-                    if wamid:
-                        chat_msg, created = ChatMessage.objects.get_or_create(
-                            whatsapp_message_id=wamid,
-                            defaults={
-                                "student": student,
-                                "phone_number": clean_phone,
-                                "sender_name": sender_name or (student.student_name if student else None),
-                                "direction": "INBOUND",
-                                "message_type": msg_type,
-                                "text_content": extracted_text,
-                                "media_url": media_url,
-                                "status": "RECEIVED",
-                                "raw_payload": msg_item,
-                                "created_at": event_time,
-                            }
-                        )
-                        if created:
-                            logger.info(f"[Webhook] Saved incoming WhatsApp message from {clean_phone}: '{extracted_text}'")
-                    else:
-                        ChatMessage.objects.create(
-                            student=student,
-                            phone_number=clean_phone,
-                            sender_name=sender_name or (student.student_name if student else None),
-                            direction="INBOUND",
-                            message_type=msg_type,
-                            text_content=extracted_text,
-                            media_url=media_url,
-                            status="RECEIVED",
-                            raw_payload=msg_item,
-                            created_at=event_time,
-                        )
-                        logger.info(f"[Webhook] Saved incoming WhatsApp message from {clean_phone}: '{extracted_text}'")
-
-                    # ── Bot chatbot handler (text messages only) ──────────
-                    # Only processes plain text; interactive button replies
-                    # are also handled since extracted_text carries the title.
-                    if msg_type in ("text", "interactive", "button"):
-                        try:
-                            handle_inbound_message(
-                                phone=clean_phone,
-                                text=extracted_text,
-                                sender_name=sender_name or (student.student_name if student else None),
+                                err_code = first_err.get("code", "")
+                                err_title = first_err.get("title", "")
+                                err_msg = first_err.get("message", "")
+                                err_details = first_err.get("error_data", {}).get("details", "")
+                                err_str = f"Meta error: {err_title} - {err_msg}"
+                                if err_code:
+                                    err_str = f"Meta error [{err_code}]: {err_title} - {err_msg}"
+                                if err_details:
+                                    err_str += f" ({err_details})"
+                            logger.error(
+                                f"[Webhook] DELIVERY FAILED for message ID '{message_id}' (Recipient: {recipient_info}): {err_str}"
                             )
-                        except Exception as bot_exc:
-                            logger.error(f"[Webhook] Bot handler error for {clean_phone}: {bot_exc}")
+                            if log_entry:
+                                log_entry.status = "FAILED"
+                                log_entry.failed_at = event_time
+                                log_entry.error_message = err_str
+                                log_entry.save()
+                        elif log_entry:
+                            logger.info(
+                                f"[Webhook] Status update for message ID '{message_id}' (Recipient: {recipient_info}): {new_status}"
+                            )
+                            if new_status == "SENT":
+                                log_entry.status = "SENT"
+                                if not log_entry.sent_at:
+                                    log_entry.sent_at = event_time
+                            elif new_status == "DELIVERED":
+                                log_entry.status = "DELIVERED"
+                                log_entry.delivered_at = event_time
+                            elif new_status == "READ":
+                                log_entry.status = "READ"
+                                log_entry.read_at = event_time
+                            log_entry.save()
+                        else:
+                            logger.info(
+                                f"[Webhook] Status update for unknown message ID '{message_id}': {new_status}"
+                            )
 
-                # 3. Process Template Status Updates
-                field = change.get("field")
-                if field == "message_template_status_update":
-                    template_name = value.get("message_template_name")
-                    event = value.get("event", "").upper()
-                    status_map = {
-                        "APPROVED": "ACTIVE",
-                        "REJECTED": "REJECTED",
-                        "PENDING": "PENDING",
-                        "PAUSED": "PAUSED",
-                        "IN_APPEAL": "PENDING",
-                    }
-                    mapped_status = status_map.get(event, event)
-                    tpl = MessageTemplate.objects.filter(name=template_name).first()
-                    if tpl:
-                        tpl.status = mapped_status
-                        tpl.save()
+                        # Update ChatMessage status if mirrored
+                        ChatMessage.objects.filter(whatsapp_message_id=message_id).update(status=new_status)
 
-        return Response({"status": "ok"})
+                    # 2. Process Incoming User Messages (Inbound replies)
+                    messages = value.get("messages", [])
+                    contacts = value.get("contacts", [])
+
+                    contacts_map = {}
+                    for c in contacts:
+                        wa_id = c.get("wa_id")
+                        name = c.get("profile", {}).get("name")
+                        if wa_id and name:
+                            contacts_map[wa_id] = name
+
+                    for msg_item in messages:
+                        msg_from = msg_item.get("from", "")
+                        wamid = msg_item.get("id")
+                        msg_type = msg_item.get("type", "text")
+                        timestamp_str = msg_item.get("timestamp")
+                        event_time = (
+                            datetime.fromtimestamp(int(timestamp_str), tz=dt_timezone.utc)
+                            if timestamp_str and timestamp_str.isdigit()
+                            else timezone.now()
+                        )
+
+                        if not msg_from:
+                            continue
+
+                        clean_phone = sanitize_phone_number(msg_from)
+                        sender_name = contacts_map.get(msg_from) or contacts_map.get(clean_phone)
+
+                        # ANTI-LOOP GUARD 1: Prevent bot from replying to business's own phone number
+                        own_phone = getattr(settings, "WHATSAPP_PHONE_NUMBER", "") or os.getenv("WHATSAPP_PHONE_NUMBER", "")
+                        if own_phone and clean_phone.endswith(own_phone.strip()[-10:]):
+                            logger.info(f"[Webhook] Message originated from business's own number {clean_phone}. Skipping.")
+                            continue
+
+                        extracted_text = ""
+                        media_url = None
+                        if msg_type == "text":
+                            extracted_text = msg_item.get("text", {}).get("body", "")
+                        elif msg_type == "interactive":
+                            interactive = msg_item.get("interactive", {})
+                            btn = interactive.get("button_reply", {})
+                            lst = interactive.get("list_reply", {})
+                            extracted_text = btn.get("title") or lst.get("title") or "[Interactive Reply]"
+                        elif msg_type == "button":
+                            extracted_text = msg_item.get("button", {}).get("text", "[Button Click]")
+                        elif msg_type == "image":
+                            caption = msg_item.get("image", {}).get("caption", "")
+                            extracted_text = f"📷 Photo: {caption}" if caption else "📷 Photo"
+                        elif msg_type == "document":
+                            filename = msg_item.get("document", {}).get("filename", "")
+                            extracted_text = f"📄 Document: {filename}" if filename else "📄 Document"
+                        elif msg_type in ("audio", "voice"):
+                            extracted_text = "🎵 Voice Note / Audio"
+                        elif msg_type == "video":
+                            caption = msg_item.get("video", {}).get("caption", "")
+                            extracted_text = f"🎥 Video: {caption}" if caption else "🎥 Video"
+                        elif msg_type == "location":
+                            loc = msg_item.get("location", {})
+                            loc_name = loc.get("name") or loc.get("address") or f"{loc.get('latitude')}, {loc.get('longitude')}"
+                            extracted_text = f"📍 Location: {loc_name}"
+                        elif msg_type == "reaction":
+                            emoji = msg_item.get("reaction", {}).get("emoji", "")
+                            extracted_text = f"Reacted: {emoji}"
+                        else:
+                            extracted_text = f"[{msg_type.capitalize()} message]"
+
+                        # Match student
+                        student = Student.objects.filter(whatsapp_number=clean_phone).first()
+                        if not student and len(clean_phone) >= 10:
+                            student = Student.objects.filter(whatsapp_number__endswith=clean_phone[-10:]).first()
+
+                        # ANTI-LOOP GUARD 2: Idempotent deduplication by wamid
+                        if wamid:
+                            chat_msg, created = ChatMessage.objects.get_or_create(
+                                whatsapp_message_id=wamid,
+                                defaults={
+                                    "student": student,
+                                    "phone_number": clean_phone,
+                                    "sender_name": sender_name or (student.student_name if student else None),
+                                    "direction": "INBOUND",
+                                    "message_type": msg_type,
+                                    "text_content": extracted_text,
+                                    "media_url": media_url,
+                                    "status": "RECEIVED",
+                                    "raw_payload": msg_item,
+                                    "created_at": event_time,
+                                }
+                            )
+                            if not created:
+                                logger.info(f"[Webhook] Duplicate message ID '{wamid}' already processed. Skipping duplicate loop.")
+                                continue
+                            logger.info(f"[Webhook] Saved incoming WhatsApp message from {clean_phone}: '{extracted_text}'")
+                        else:
+                            ChatMessage.objects.create(
+                                student=student,
+                                phone_number=clean_phone,
+                                sender_name=sender_name or (student.student_name if student else None),
+                                direction="INBOUND",
+                                message_type=msg_type,
+                                text_content=extracted_text,
+                                media_url=media_url,
+                                status="RECEIVED",
+                                raw_payload=msg_item,
+                                created_at=event_time,
+                            )
+                            logger.info(f"[Webhook] Saved incoming WhatsApp message from {clean_phone}: '{extracted_text}'")
+
+                        # ── Bot chatbot handler (text messages only) ──────────
+                        # Only processes plain text when WHATSAPP_BOT_ENABLED is True
+                        bot_enabled = getattr(settings, "WHATSAPP_BOT_ENABLED", False)
+                        if bot_enabled and msg_type in ("text", "interactive", "button"):
+                            try:
+                                handle_inbound_message(
+                                    phone=clean_phone,
+                                    text=extracted_text,
+                                    sender_name=sender_name or (student.student_name if student else None),
+                                )
+                            except Exception as bot_exc:
+                                logger.error(f"[Webhook] Bot handler error for {clean_phone}: {bot_exc}")
+                        elif not bot_enabled:
+                            logger.info(f"[Webhook] Bot is DISABLED. Message from {clean_phone} recorded in chat, no bot reply sent.")
+
+                    # 3. Process Template Status Updates
+                    field = change.get("field")
+                    if field == "message_template_status_update":
+                        template_name = value.get("message_template_name")
+                        event = value.get("event", "").upper()
+                        status_map = {
+                            "APPROVED": "ACTIVE",
+                            "REJECTED": "REJECTED",
+                            "PENDING": "PENDING",
+                            "PAUSED": "PAUSED",
+                            "IN_APPEAL": "PENDING",
+                        }
+                        mapped_status = status_map.get(event, event)
+                        tpl = MessageTemplate.objects.filter(name=template_name).first()
+                        if tpl:
+                            tpl.status = mapped_status
+                            tpl.save()
+
+            return Response({"status": "ok"})
+        except Exception as webhook_err:
+            logger.error(f"[Webhook] Unexpected error in webhook handler: {webhook_err}", exc_info=True)
+            # CRITICAL: Always return HTTP 200 OK to Meta so Meta never retries in a loop
+            return Response({"status": "error_handled"}, status=200)
 
 
 class ConversationDetailView(APIView):

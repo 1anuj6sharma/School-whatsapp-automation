@@ -251,6 +251,38 @@ class WhatsAppService:
     def is_configured(self) -> bool:
         return bool(self.get_phone_number_id() and self.get_access_token())
 
+    @staticmethod
+    def _is_rate_limit_error(status_code: int, meta_error: dict) -> tuple:
+        """
+        Detects if an error is due to Meta throughput or rate limiting (HTTP 429, code 130429, etc.).
+        Rate limits MUST NEVER be retried in a rapid loop, as retrying compounds Meta's throttle penalty.
+        """
+        if not isinstance(meta_error, dict):
+            meta_error = {}
+        code = int(meta_error.get("code", 0) or 0)
+        subcode = int(meta_error.get("error_subcode", 0) or 0)
+        msg = str(meta_error.get("message", "")).lower()
+        title = str(meta_error.get("error_user_title", "") or meta_error.get("title", "")).lower()
+        details = str(meta_error.get("error_data", {}).get("details", "")).lower()
+
+        is_rate_limit = (
+            status_code == 429
+            or code in (130429, 80007, 131031)
+            or subcode == 2494064
+            or "rate limit" in msg
+            or "throughput" in msg
+            or "rate limit" in title
+            or "too many messages" in details
+        )
+
+        detail_text = (
+            meta_error.get("error_data", {}).get("details")
+            or meta_error.get("error_user_msg")
+            or meta_error.get("message")
+            or "Cloud API message throughput limit reached"
+        )
+        return is_rate_limit, str(detail_text)
+
     async def send_template_message(
         self,
         recipient_number: str,
@@ -401,6 +433,31 @@ class WhatsAppService:
                         contacts = response_json.get("contacts", [])
                         wa_id = contacts[0].get("wa_id") if contacts else sanitized_recipient
 
+                        # Meta occasionally returns 200 OK but embeds a 130429 rate-limit
+                        # error inside the JSON body (async delivery failure).
+                        # Detect it here so callers do NOT retry and worsen the throttle.
+                        inline_errors = response_json.get("errors", [])
+                        if not inline_errors and messages:
+                            first_msg = messages[0] if messages else {}
+                            inline_errors = first_msg.get("errors", [])
+                        rate_limit_inline = any(
+                            int(e.get("code", 0)) == 130429 for e in inline_errors if isinstance(e, dict)
+                        )
+                        if rate_limit_inline:
+                            err_detail = inline_errors[0].get("error_data", {}).get(
+                                "details", "Meta throughput rate limit hit (130429)"
+                            )
+                            logger.error(
+                                f"[WhatsAppService] 130429 throughput rate-limit inside 200 OK for {masked}. "
+                                f"NOT retrying to avoid extending throttle window. Detail: {err_detail}"
+                            )
+                            return {
+                                "success": False,
+                                "error": f"Meta error [130429]: Rate limit hit - {err_detail}",
+                                "meta_error": {"code": 130429, "details": err_detail},
+                                "status_code": 200,
+                            }
+
                         logger.info(
                             f"[WhatsAppService] Message sent successfully to {masked} | Message ID: {message_id}"
                         )
@@ -411,16 +468,32 @@ class WhatsAppService:
                             "response_data": response_json,
                         }
 
-                    if response.status_code in (429, 500, 502, 503, 504) and retry_count < max_retries:
+                    meta_error = response_json.get("error", {})
+                    is_rate_limited, rate_limit_detail = self._is_rate_limit_error(response.status_code, meta_error)
+
+                    if is_rate_limited:
+                        err_code = meta_error.get("code") or 130429
+                        logger.error(
+                            f"[WhatsAppService] Rate limit detected (HTTP {response.status_code}, code {err_code}) for {masked}. "
+                            f"Retries HALTED immediately to protect account and allow throttle window to clear. Detail: {rate_limit_detail}"
+                        )
+                        return {
+                            "success": False,
+                            "error": f"Meta error [{err_code}]: Rate limit hit - {rate_limit_detail}",
+                            "meta_error": meta_error or {"code": err_code, "details": rate_limit_detail},
+                            "status_code": response.status_code,
+                        }
+
+                    # Only retry on transient server errors (HTTP 500, 502, 503, 504), NEVER on 429 or rate limits
+                    if response.status_code in (500, 502, 503, 504) and retry_count < max_retries:
                         retry_count += 1
                         logger.warning(
-                            f"[WhatsAppService] HTTP {response.status_code} for {masked}. Retrying in {backoff_delay}s..."
+                            f"[WhatsAppService] HTTP {response.status_code} for {masked}. Retrying in {backoff_delay}s... (attempt {retry_count}/{max_retries})"
                         )
                         await asyncio.sleep(backoff_delay)
                         backoff_delay *= 2
                         continue
 
-                    meta_error = response_json.get("error", {})
                     error_message = (
                         meta_error.get("message")
                         or meta_error.get("error_user_msg")
@@ -519,17 +592,32 @@ class WhatsAppService:
                             "response_data": response_json,
                         }
 
-                    if response.status_code in (429, 500, 502, 503, 504) and retry_count < max_retries:
-                        retry_count += 1
-                        actual_delay = max(backoff_delay, 4.0) if response.status_code == 429 else backoff_delay
-                        logger.warning(
-                            f"[WhatsAppService] HTTP {response.status_code} for {masked}. Retrying in {actual_delay}s..."
+                    meta_error = response_json.get("error", {})
+                    is_rate_limited, rate_limit_detail = self._is_rate_limit_error(response.status_code, meta_error)
+
+                    if is_rate_limited:
+                        err_code = meta_error.get("code") or 130429
+                        logger.error(
+                            f"[WhatsAppService] Rate limit detected on text message (HTTP {response.status_code}, code {err_code}) for {masked}. "
+                            f"Retries HALTED immediately. Detail: {rate_limit_detail}"
                         )
-                        await asyncio.sleep(actual_delay)
+                        return {
+                            "success": False,
+                            "error": f"Meta error [{err_code}]: Rate limit hit - {rate_limit_detail}",
+                            "meta_error": meta_error or {"code": err_code, "details": rate_limit_detail},
+                            "status_code": response.status_code,
+                        }
+
+                    # Only retry on transient server errors (HTTP 500, 502, 503, 504)
+                    if response.status_code in (500, 502, 503, 504) and retry_count < max_retries:
+                        retry_count += 1
+                        logger.warning(
+                            f"[WhatsAppService] HTTP {response.status_code} for {masked}. Retrying in {backoff_delay}s... (attempt {retry_count}/{max_retries})"
+                        )
+                        await asyncio.sleep(backoff_delay)
                         backoff_delay *= 2
                         continue
 
-                    meta_error = response_json.get("error", {})
                     error_message = (
                         meta_error.get("message")
                         or meta_error.get("error_user_msg")

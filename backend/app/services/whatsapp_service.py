@@ -152,18 +152,43 @@ class WhatsAppService:
                             "response_data": response_json
                         }
 
-                    # Handle 429 Rate Limiting or 5xx Server Error with exponential backoff
-                    if response.status_code in (429, 500, 502, 503, 504) and retry_count < max_retries:
+                    meta_error = response_json.get("error", {})
+                    code = int(meta_error.get("code", 0) or 0)
+                    subcode = int(meta_error.get("error_subcode", 0) or 0)
+                    msg = str(meta_error.get("message", "")).lower()
+                    is_rate_limit = (
+                        response.status_code == 429
+                        or code in (130429, 80007, 131031)
+                        or subcode == 2494064
+                        or "rate limit" in msg
+                        or "throughput" in msg
+                    )
+
+                    if is_rate_limit:
+                        err_code = code or 130429
+                        err_detail = meta_error.get("error_data", {}).get("details") or meta_error.get("message") or "Throughput rate limit reached"
+                        logger.error(
+                            f"[WhatsAppService] Rate limit detected (HTTP {response.status_code}, code {err_code}) for {masked}. "
+                            f"Retries HALTED immediately. Detail: {err_detail}"
+                        )
+                        return {
+                            "success": False,
+                            "error": f"Meta error [{err_code}]: Rate limit hit - {err_detail}",
+                            "status_code": response.status_code,
+                            "meta_error": meta_error,
+                        }
+
+                    # Handle 5xx Server Error with exponential backoff (NEVER 429)
+                    if response.status_code in (500, 502, 503, 504) and retry_count < max_retries:
                         retry_count += 1
                         logger.warning(
-                            f"[WhatsAppService] Received HTTP {response.status_code} from Meta for {masked}. Retrying in {backoff_delay}s..."
+                            f"[WhatsAppService] Received HTTP {response.status_code} from Meta for {masked}. Retrying in {backoff_delay}s... (attempt {retry_count}/{max_retries})"
                         )
                         await asyncio.sleep(backoff_delay)
                         backoff_delay *= 2
                         continue
 
                     # Extract Meta API specific error structure safely
-                    meta_error = response_json.get("error", {})
                     error_message = (
                         meta_error.get("message") or
                         meta_error.get("error_user_msg") or

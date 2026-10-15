@@ -168,10 +168,32 @@ class CampaignService:
         tpl_var_mappings, tpl_body_preview, tpl_sample_img = await get_template_info()
         base_dyn_params = dynamic_parameters or tpl_var_mappings
 
-        concurrency = getattr(settings, "WHATSAPP_MAX_CONCURRENCY", 5)
+        concurrency = getattr(settings, "WHATSAPP_MAX_CONCURRENCY", 2)
         semaphore = asyncio.Semaphore(concurrency)
+        throttle_lock = asyncio.Lock()
+        is_throttled = False
+        throttle_reason = ""
 
         async def send_single_log(log_item: MessageLog):
+            nonlocal is_throttled, throttle_reason
+
+            if is_throttled:
+                logger.warning(
+                    f"[CampaignService] Skipping send for log #{log_item.id} because Meta rate limit (130429) was hit in this batch."
+                )
+                @sync_to_async
+                def mark_throttled_skipped():
+                    try:
+                        log_rec = MessageLog.objects.get(id=log_item.id)
+                        log_rec.status = "FAILED"
+                        log_rec.failed_at = timezone.now()
+                        log_rec.error_message = f"Batch paused: Meta rate limit (130429) active. Protection engaged to prevent extending ban."
+                        log_rec.save()
+                    except Exception as err:
+                        logger.error(f"[CampaignService] Could not save throttled status for log #{log_item.id}: {err}")
+                await mark_throttled_skipped()
+                return
+
             async with semaphore:
                 try:
                     student_id = log_item.student_id
@@ -226,6 +248,23 @@ class CampaignService:
                         parameters=params,
                         header_image_url=header_image_url,
                     )
+
+                    # Check if Meta returned a rate limit error code
+                    err_code = str(result.get("meta_error", {}).get("code", "") or "")
+                    err_txt = str(result.get("error", "") or "")
+                    if "130429" in err_code or "130429" in err_txt or "rate limit" in err_txt.lower():
+                        async with throttle_lock:
+                            is_throttled = True
+                            throttle_reason = err_txt or "Throughput rate limit (130429)"
+                            logger.error(
+                                f"[CampaignService] Meta 130429 throttle detected! Halting remaining messages in batch to prevent extended throttle."
+                            )
+
+                    # Rate-limit guard: pause between each outbound message to avoid
+                    # triggering Meta's 130429 throughput throttle (error_data:
+                    # "too many messages sent from this phone number in a short period").
+                    send_delay = float(getattr(settings, "WHATSAPP_SEND_DELAY", 1.0))
+                    await asyncio.sleep(send_delay)
 
                     @sync_to_async
                     def update_log():
@@ -317,6 +356,10 @@ class CampaignService:
         campaign.save()
 
         def run_dispatch():
+            # Safe cool-down before retry dispatch to allow any transient
+            # Meta throughput counter to reset.
+            import time as _time
+            _time.sleep(10)
             asyncio.run(
                 CampaignService._dispatch_campaign(
                     campaign_id=campaign.id,

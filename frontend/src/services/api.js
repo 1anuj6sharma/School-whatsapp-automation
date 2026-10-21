@@ -296,6 +296,7 @@ export const api = {
     if (params?.from_date) url.searchParams.append('from_date', params.from_date);
     if (params?.to_date) url.searchParams.append('to_date', params.to_date);
     if (params?.before_date) url.searchParams.append('before_date', params.before_date);
+    if (params?.response_date) url.searchParams.append('response_date', params.response_date);
     if (params?.limit) url.searchParams.append('limit', params.limit.toString());
 
     const res = await fetch(url.pathname + url.search);

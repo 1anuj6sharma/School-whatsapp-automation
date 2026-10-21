@@ -759,6 +759,7 @@ class MessageLogListView(APIView):
         from_date = request.query_params.get("from_date")
         to_date = request.query_params.get("to_date")
         before_date = request.query_params.get("before_date")
+        response_date = request.query_params.get("response_date")
         limit = int(request.query_params.get("limit", 2000))
         offset = int(request.query_params.get("offset", 0))
 
@@ -768,7 +769,7 @@ class MessageLogListView(APIView):
             qs = qs.filter(campaign_id=campaign_id)
         if student_id:
             qs = qs.filter(student_id=student_id)
-        if status_filter and str(status_filter).strip().upper() not in ("ALL", "", "NONE"):
+        if status_filter and str(status_filter).strip().upper() not in ("ALL", "", "NONE", "RESPONSES", "RESPONDED"):
             qs = qs.filter(status__iexact=str(status_filter).strip())
         if from_date:
             parsed_from = parse_date(str(from_date).strip())
@@ -783,7 +784,66 @@ class MessageLogListView(APIView):
             if parsed_before:
                 qs = qs.filter(created_at__date__lt=parsed_before)
 
-        logs = qs[offset : offset + limit]
+        logs = list(qs[offset : offset + limit])
+
+        # Optimize: Batch query inbound ChatMessages for these logs
+        student_ids = {l.student_id for l in logs if l.student_id}
+        phone_tails = set()
+        clean_phones = set()
+        for l in logs:
+            if l.recipient_number:
+                p = sanitize_phone_number(l.recipient_number)
+                clean_phones.add(p)
+                if len(p) >= 10:
+                    phone_tails.add(p[-10:])
+
+        inbound_q = Q()
+        if student_ids:
+            inbound_q |= Q(student_id__in=student_ids)
+        if clean_phones:
+            inbound_q |= Q(phone_number__in=clean_phones)
+        for tail in phone_tails:
+            inbound_q |= Q(phone_number__endswith=tail)
+
+        inbound_by_student = {}
+        inbound_by_phone = {}
+        if inbound_q:
+            inbound_msgs = (
+                ChatMessage.objects.filter(direction="INBOUND")
+                .filter(inbound_q)
+                .order_by("-created_at")
+            )
+            for m in inbound_msgs:
+                if m.student_id:
+                    inbound_by_student.setdefault(m.student_id, []).append(m)
+                if m.phone_number:
+                    cp = sanitize_phone_number(m.phone_number)
+                    inbound_by_phone.setdefault(cp, []).append(m)
+                    if len(cp) >= 10:
+                        inbound_by_phone.setdefault(cp[-10:], []).append(m)
+
+        for l in logs:
+            cp = sanitize_phone_number(l.recipient_number) if l.recipient_number else ""
+            matched = (
+                inbound_by_student.get(l.student_id)
+                or inbound_by_phone.get(cp)
+                or (inbound_by_phone.get(cp[-10:]) if len(cp) >= 10 else None)
+                or []
+            )
+            l.has_response = len(matched) > 0
+            l.response_count = len(matched)
+            l.unread_count = sum(1 for m in matched if (m.status or "").upper() in ("RECEIVED", "UNREAD"))
+            l.latest_response_at = matched[0].created_at if matched else None
+            l.latest_response_text = (matched[0].text_content or f"[{matched[0].message_type}]") if matched else None
+
+        if status_filter and str(status_filter).strip().upper() in ("RESPONSES", "RESPONDED"):
+            logs = [l for l in logs if l.has_response]
+
+        if response_date and str(response_date).strip():
+            parsed_resp_date = parse_date(str(response_date).strip())
+            if parsed_resp_date:
+                logs = [l for l in logs if l.latest_response_at and l.latest_response_at.date() == parsed_resp_date]
+
         return Response(MessageLogSerializer(logs, many=True).data)
 
 
@@ -1216,6 +1276,9 @@ class ConversationDetailView(APIView):
             .order_by("created_at")
         )
 
+        # Mark unread inbound messages as READ when viewed by admin
+        ChatMessage.objects.filter(filter_q, direction="INBOUND", status="RECEIVED").update(status="READ")
+
         # Deduplicate any duplicate ChatMessage records in DB
         seen_keys = set()
         chat_messages = []
@@ -1344,6 +1407,9 @@ class ConversationSendMessageView(APIView):
         template_name = vdata.get("template_name")
         language_code = vdata.get("language_code", "en_US")
         parameters = vdata.get("parameters")
+        media_url = vdata.get("media_url")
+        media_type = vdata.get("media_type") or ("document" if (media_url and media_url.lower().endswith(".pdf")) else "image")
+        filename = vdata.get("filename")
 
         student = None
         if student_id:
@@ -1404,6 +1470,39 @@ class ConversationSendMessageView(APIView):
                 status="SENT" if succ else "FAILED",
                 whatsapp_message_id=wamid,
                 message_log=log_entry,
+                created_at=timezone.now(),
+            )
+            return Response({
+                "success": succ,
+                "message": ChatMessageSerializer(chat_msg).data,
+                "error": result.get("error"),
+            })
+        elif media_url:
+            caption = text_message if text_message else None
+            try:
+                result = async_to_sync(whatsapp_service.send_media_message)(
+                    recipient_number=clean_phone,
+                    media_url=media_url,
+                    media_type=media_type,
+                    caption=caption,
+                    filename=filename,
+                )
+            except Exception as exc:
+                logger.error(f"[ConversationSendMessage] Media send exception: {exc}", exc_info=True)
+                result = {"success": False, "error": str(exc)}
+
+            wamid = result.get("message_id")
+            succ = result.get("success", False)
+
+            chat_msg = ChatMessage.objects.create(
+                student=student,
+                phone_number=clean_phone,
+                direction="OUTBOUND",
+                message_type=media_type,
+                media_url=media_url,
+                text_content=caption,
+                status="SENT" if succ else "FAILED",
+                whatsapp_message_id=wamid,
                 created_at=timezone.now(),
             )
             return Response({
@@ -1478,24 +1577,25 @@ class MediaUploadView(APIView):
     def post(self, request):
         if "file" not in request.FILES:
             return Response(
-                {"detail": "No file uploaded. Please select an image file."},
+                {"detail": "No file uploaded. Please select an image or PDF document."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         uploaded_file = request.FILES["file"]
         ext = Path(uploaded_file.name).suffix.lower()
 
-        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
         if ext not in allowed_extensions:
             return Response(
-                {"detail": f"Unsupported file type '{ext}'. Allowed types: JPG, JPEG, PNG, WEBP."},
+                {"detail": f"Unsupported file type '{ext}'. Allowed types: JPG, JPEG, PNG, WEBP, PDF."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        max_size = 5 * 1024 * 1024  # 5MB Meta WhatsApp limit
+        max_size = 15 * 1024 * 1024 if ext == ".pdf" else 5 * 1024 * 1024
         if uploaded_file.size > max_size:
+            limit_mb = 15 if ext == ".pdf" else 5
             return Response(
-                {"detail": "File size exceeds 5MB limit. Please upload an image under 5MB."},
+                {"detail": f"File size exceeds {limit_mb}MB limit."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1513,11 +1613,14 @@ class MediaUploadView(APIView):
         base_url = request.build_absolute_uri("/").rstrip("/")
         file_url = f"{base_url}/uploads/{unique_filename}"
         relative_url = f"/uploads/{unique_filename}"
+        file_type = "document" if ext == ".pdf" else "image"
 
         return Response(
             {
                 "success": True,
                 "filename": unique_filename,
+                "original_filename": clean_original_name,
+                "file_type": file_type,
                 "url": file_url,
                 "relative_url": relative_url,
             },
@@ -1722,6 +1825,40 @@ class ComplaintFeedbackDetailView(APIView):
             item.category = request.data.get("category")
 
         item.save()
+
+        notify_parent = request.data.get("notify_parent", False)
+        if new_status and new_status.upper() == "RESOLVED" and notify_parent and item.phone_number:
+            try:
+                cat_dict = dict(item.CATEGORY_CHOICES)
+                category_label = cat_dict.get(item.category, item.category or "School Concern")
+                sub_label = "complaint" if item.submission_type == "COMPLAINT" else "feedback"
+                
+                if item.admin_reply and item.admin_reply.strip():
+                    notify_msg = f"Dear Parent, your {sub_label} regarding {category_label} has been addressed by school management.\n\nResolution Details: {item.admin_reply.strip()}"
+                else:
+                    notify_msg = f"Dear Parent, your {sub_label} regarding {category_label} has been addressed by school management."
+
+                clean_phone = sanitize_phone_number(item.phone_number)
+                res = async_to_sync(whatsapp_service.send_text_message)(
+                    recipient_number=clean_phone,
+                    message_text=notify_msg,
+                )
+                succ = res.get("success", False)
+                wamid = res.get("message_id")
+
+                ChatMessage.objects.create(
+                    student=item.student,
+                    phone_number=clean_phone,
+                    direction="OUTBOUND",
+                    message_type="text",
+                    text_content=notify_msg,
+                    status="SENT" if succ else "FAILED",
+                    whatsapp_message_id=wamid,
+                    created_at=timezone.now(),
+                )
+            except Exception as notify_err:
+                logger.error(f"[ComplaintFeedbackDetailView] Failed to notify parent via WhatsApp: {notify_err}", exc_info=True)
+
         return Response(ComplaintFeedbackSerializer(item).data)
 
     def delete(self, request, pk):

@@ -15,6 +15,9 @@ import {
   ChevronDown,
   FileText,
   AlertTriangle,
+  Paperclip,
+  Download,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -36,9 +39,15 @@ export const ConversationDrawer = ({
   const [templates, setTemplates] = useState([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
 
+  // File attachment state (PDF / Images / Fee receipts)
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [filePreview, setFilePreview] = useState(null);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const identifier = studentId || phoneNumber;
 
@@ -144,22 +153,95 @@ export const ConversationDrawer = ({
     };
   })();
 
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSendError('');
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    const isImage = file.type.startsWith('image/');
+
+    if (!isPdf && !isImage) {
+      setSendError('Unsupported file type. Please select a PDF document or an image (JPG, PNG, WEBP).');
+      return;
+    }
+
+    const maxSize = isPdf ? 15 * 1024 * 1024 : 5 * 1024 * 1024;
+    if (file.size > maxSize) {
+      setSendError(`File exceeds maximum allowed size (${isPdf ? '15MB for PDF' : '5MB for Image'}).`);
+      return;
+    }
+
+    setSelectedFile(file);
+    if (isImage) {
+      const previewUrl = URL.createObjectURL(file);
+      setFilePreview({
+        type: 'image',
+        url: previewUrl,
+        name: file.name,
+        size: file.size,
+      });
+    } else {
+      setFilePreview({
+        type: 'document',
+        url: null,
+        name: file.name,
+        size: file.size,
+      });
+    }
+  };
+
+  const handleClearFile = () => {
+    setSelectedFile(null);
+    setFilePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const text = inputMessage.trim();
-    if (!text || sending) return;
+    if ((!text && !selectedFile) || sending || uploadingMedia) return;
 
     setSending(true);
     setSendError('');
     try {
+      let uploadedMediaUrl = null;
+      let detectedMediaType = null;
+      let uploadedFilename = null;
+
+      if (selectedFile) {
+        setUploadingMedia(true);
+        try {
+          const uploadRes = await api.uploadMedia(selectedFile);
+          uploadedMediaUrl = uploadRes.relative_url || uploadRes.url;
+          uploadedFilename = selectedFile.name;
+          const isPdf = selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf');
+          detectedMediaType = uploadRes.file_type || (isPdf ? 'document' : 'image');
+        } catch (uploadErr) {
+          throw new Error(`Media upload failed: ${uploadErr.message || 'Could not upload attachment'}`);
+        } finally {
+          setUploadingMedia(false);
+        }
+      }
+
       const payload = {
         phone_number: displayPhone,
         student_id: student?.id || studentId || null,
         message: text,
       };
+
+      if (uploadedMediaUrl) {
+        payload.media_url = uploadedMediaUrl;
+        payload.media_type = detectedMediaType;
+        payload.filename = uploadedFilename;
+      }
+
       const res = await api.sendConversationMessage(payload);
       if (res && res.success !== false) {
         setInputMessage('');
+        handleClearFile();
         await fetchConversation(false);
         setTimeout(() => {
           if (messagesEndRef.current) {
@@ -175,6 +257,7 @@ export const ConversationDrawer = ({
       setSendError(err.message || 'Failed to send message.');
     } finally {
       setSending(false);
+      setUploadingMedia(false);
     }
   };
 
@@ -410,29 +493,69 @@ export const ConversationDrawer = ({
                         </div>
                       )}
 
-                      {/* Media Image Attachment */}
-                      {msg.media_url && (
-                        <div className="mb-2.5 overflow-hidden rounded-xl border border-black/10 shadow-xs bg-black/5">
-                          <img
-                            src={
-                              msg.media_url.startsWith('http') || msg.media_url.startsWith('data:')
-                                ? msg.media_url
-                                : `${window.location.origin}${msg.media_url.startsWith('/') ? '' : '/'}${msg.media_url}`
-                            }
-                            alt="Attachment"
-                            className="w-full max-h-56 object-cover rounded-xl hover:opacity-95 transition-opacity cursor-pointer"
-                            onClick={() => {
-                              const fullUrl = msg.media_url.startsWith('http')
-                                ? msg.media_url
-                                : `${window.location.origin}${msg.media_url.startsWith('/') ? '' : '/'}${msg.media_url}`;
-                              window.open(fullUrl, '_blank');
-                            }}
-                            onError={(e) => {
-                              e.target.style.display = 'none';
-                            }}
-                          />
-                        </div>
-                      )}
+                      {/* Media Attachment: PDF Document or Image */}
+                      {msg.media_url && (() => {
+                        const fullUrl = msg.media_url.startsWith('http') || msg.media_url.startsWith('data:')
+                          ? msg.media_url
+                          : `${window.location.origin}${msg.media_url.startsWith('/') ? '' : '/'}${msg.media_url}`;
+                        const isPdf = msg.media_url.toLowerCase().endsWith('.pdf') || msg.message_type === 'document';
+
+                        if (isPdf) {
+                          const docName = msg.media_url.split('/').pop().replace(/^[a-f0-9]+_/, '') || 'Document.pdf';
+                          return (
+                            <div
+                              className={`mb-2.5 p-2.5 rounded-xl border flex items-center justify-between gap-3 ${
+                                isOutbound
+                                  ? 'bg-emerald-700/80 border-emerald-500/50 text-white'
+                                  : 'bg-slate-50 border-slate-200 text-slate-800'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className={`p-2 rounded-lg shrink-0 ${isOutbound ? 'bg-emerald-800/80 text-rose-200' : 'bg-rose-100 text-rose-600'}`}>
+                                  <FileText className="w-5 h-5" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold truncate max-w-[150px] sm:max-w-[190px]" title={docName}>
+                                    {docName}
+                                  </p>
+                                  <p className={`text-[10px] ${isOutbound ? 'text-emerald-200' : 'text-slate-400'}`}>
+                                    PDF Document &bull; WhatsApp
+                                  </p>
+                                </div>
+                              </div>
+                              <a
+                                href={fullUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 shrink-0 transition-colors ${
+                                  isOutbound
+                                    ? 'bg-white text-emerald-800 hover:bg-emerald-50'
+                                    : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                }`}
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Open</span>
+                              </a>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="mb-2.5 overflow-hidden rounded-xl border border-black/10 shadow-xs bg-black/5">
+                            <img
+                              src={fullUrl}
+                              alt="Attachment"
+                              className="w-full max-h-56 object-cover rounded-xl hover:opacity-95 transition-opacity cursor-pointer"
+                              onClick={() => {
+                                window.open(fullUrl, '_blank');
+                              }}
+                              onError={(e) => {
+                                e.target.style.display = 'none';
+                              }}
+                            />
+                          </div>
+                        );
+                      })()}
 
                       {/* Content Body */}
                       <p className="text-xs sm:text-[13px] leading-relaxed whitespace-pre-wrap break-words font-sans">
@@ -573,27 +696,82 @@ export const ConversationDrawer = ({
                   </span>
                 </div>
 
+                {/* Attachment Preview Strip */}
+                {filePreview && (
+                  <div className="mb-2 p-2 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2 animate-fade-in">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {filePreview.type === 'image' && filePreview.url ? (
+                        <img
+                          src={filePreview.url}
+                          alt="Preview"
+                          className="w-10 h-10 object-cover rounded-lg border border-slate-200 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shrink-0">
+                          <FileText className="w-5 h-5" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-800 truncate max-w-[200px]" title={filePreview.name}>
+                          {filePreview.name}
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          {filePreview.type === 'document' ? 'PDF Document' : 'Image'} &bull; {(filePreview.size / 1024).toFixed(0)} KB
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleClearFile}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                      title="Remove attachment"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 <form onSubmit={handleSendMessage} className="flex items-end gap-2">
+                  {/* Hidden File Input */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    accept="image/*,.pdf"
+                    onChange={handleFileSelect}
+                  />
+
+                  {/* Attachment Button */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={sending || uploadingMedia}
+                    className="p-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-emerald-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all border border-slate-200 shrink-0 flex items-center justify-center"
+                    title="Attach PDF Fee Receipt, Report Card, or Image"
+                  >
+                    <Paperclip className="w-4 h-4" />
+                  </button>
+
                   <div className="flex-1 relative">
                     <textarea
                       ref={textareaRef}
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      placeholder={`Type a WhatsApp message to ${displayName}...`}
+                      placeholder={selectedFile ? `Add an optional caption for ${selectedFile.name}...` : `Type a WhatsApp message to ${displayName}...`}
                       rows={2}
-                      disabled={sending}
+                      disabled={sending || uploadingMedia}
                       className="w-full resize-none px-3.5 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 placeholder-slate-400 transition-all"
                     />
                   </div>
 
                   <button
                     type="submit"
-                    disabled={sending || !inputMessage.trim()}
+                    disabled={sending || uploadingMedia || (!inputMessage.trim() && !selectedFile)}
                     className="p-3 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 transition-all shadow-md shadow-emerald-600/20 shrink-0 flex items-center justify-center"
-                    title="Send WhatsApp Message"
+                    title={selectedFile ? 'Send WhatsApp Attachment' : 'Send WhatsApp Message'}
                   >
-                    {sending ? (
+                    {sending || uploadingMedia ? (
                       <Loader2 className="w-5 h-5 animate-spin" />
                     ) : (
                       <Send className="w-5 h-5" />

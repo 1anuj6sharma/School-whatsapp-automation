@@ -14,6 +14,7 @@ import {
   XCircle,
   Hash,
   Search,
+  X,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
@@ -34,9 +35,28 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [campaignFilter, setCampaignFilter] = useState(initialCampaignId ? String(initialCampaignId) : 'ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [responseDateFilter, setResponseDateFilter] = useState('');
+  const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
   const [activeConversation, setActiveConversation] = useState(null);
+
+  const handleCloseConversation = () => {
+    if (activeConversation) {
+      setLogs((prev) =>
+        prev.map((l) => {
+          if (
+            (activeConversation.studentId && l.student_id === activeConversation.studentId) ||
+            (activeConversation.phoneNumber && l.recipient_number === activeConversation.phoneNumber)
+          ) {
+            return { ...l, unread_count: 0 };
+          }
+          return l;
+        })
+      );
+    }
+    setActiveConversation(null);
+  };
 
   // Selection & Deletion states
   const [selectedIds, setSelectedIds] = useState([]);
@@ -94,7 +114,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
     fetchLogs();
   }, [campaignFilter]);
 
-  // Dynamic counts according to current campaign filter (Sent, Delivered, Read, Failed, Queued)
+  // Dynamic counts according to current campaign filter (Sent, Delivered, Read, Failed, Queued, Responses)
   const counts = useMemo(() => {
     const total = logs.length;
     let sent = 0;
@@ -102,6 +122,9 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
     let read = 0;
     let failed = 0;
     let queued = 0;
+    let responses = 0;
+    let unread_responses = 0;
+    let unread_chats = 0;
 
     logs.forEach((log) => {
       const st = (log.status || '').toUpperCase();
@@ -110,19 +133,48 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
       else if (st === 'READ') read++;
       else if (st === 'FAILED') failed++;
       else if (st === 'QUEUED') queued++;
+
+      if (log.has_response) {
+        responses++;
+        if (log.unread_count > 0) {
+          unread_responses += log.unread_count;
+          unread_chats++;
+        }
+      }
     });
 
-    return { total, sent, delivered, read, failed, queued };
+    return { total, sent, delivered, read, failed, queued, responses, unread_responses, unread_chats };
   }, [logs]);
 
-  // Filter logs by statusFilter AND search query
+  // Filter logs by statusFilter, responseDateFilter, showUnreadOnly AND search query
   const filteredLogs = useMemo(() => {
     let result = logs;
 
+    // Show unread only toggle
+    if (showUnreadOnly) {
+      result = result.filter((log) => log.has_response && Number(log.unread_count || 0) > 0);
+    }
+
     // Status filter
     if (statusFilter && statusFilter !== 'ALL') {
-      const target = statusFilter.toUpperCase();
-      result = result.filter((log) => (log.status || '').toUpperCase() === target);
+      if (statusFilter === 'RESPONSES') {
+        result = result.filter((log) => log.has_response);
+      } else {
+        const target = statusFilter.toUpperCase();
+        result = result.filter((log) => (log.status || '').toUpperCase() === target);
+      }
+    }
+
+    // Date-wise filter for response date (if not selected, shows all)
+    if (responseDateFilter) {
+      result = result.filter((log) => {
+        if (statusFilter === 'RESPONSES' || log.has_response) {
+          const respDate = log.latest_response_at ? log.latest_response_at.slice(0, 10) : '';
+          return respDate === responseDateFilter;
+        }
+        const createdDate = (log.sent_at || log.created_at || '').slice(0, 10);
+        return createdDate === responseDateFilter;
+      });
     }
 
     // Search query filter
@@ -133,6 +185,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
         const phone = (log.recipient_number || '').toLowerCase();
         const template = (log.template_name || '').toLowerCase();
         const wamid = (log.whatsapp_message_id || '').toLowerCase();
+        const respText = (log.latest_response_text || '').toLowerCase();
         const logId = String(log.id || '');
         const campId = String(log.campaign_id || '');
         return (
@@ -140,6 +193,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
           phone.includes(q) ||
           template.includes(q) ||
           wamid.includes(q) ||
+          respText.includes(q) ||
           logId.includes(q) ||
           campId.includes(q)
         );
@@ -147,7 +201,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
     }
 
     return result;
-  }, [logs, statusFilter, searchQuery]);
+  }, [logs, statusFilter, responseDateFilter, searchQuery, showUnreadOnly]);
 
   // Paginated logs for current page (10 logs per page)
   const paginatedLogs = useMemo(() => {
@@ -363,7 +417,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
       </div>
 
       {/* Filter Counts Metric Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* Total Logs */}
         <div
           onClick={() => {
@@ -466,7 +520,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             setStatusFilter(statusFilter === 'FAILED' ? 'ALL' : 'FAILED');
             setCurrentPage(1);
           }}
-          className={`col-span-2 sm:col-span-1 cursor-pointer p-3.5 sm:p-4 rounded-2xl border transition-all ${
+          className={`cursor-pointer p-3.5 sm:p-4 rounded-2xl border transition-all ${
             statusFilter === 'FAILED'
               ? 'bg-rose-600 text-white border-rose-600 shadow-sm ring-2 ring-rose-500/20'
               : 'bg-white text-slate-800 border-slate-200 hover:border-rose-200 hover:bg-rose-50/40 shadow-xs'
@@ -481,6 +535,37 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
           <p className="text-xl sm:text-2xl font-black mt-1">{counts.failed}</p>
           <p className={`text-[10px] mt-0.5 ${statusFilter === 'FAILED' ? 'text-rose-100' : 'text-slate-400'}`}>
             Undelivered errors
+          </p>
+        </div>
+
+        {/* Responses Card */}
+        <div
+          onClick={() => {
+            setStatusFilter(statusFilter === 'RESPONSES' ? 'ALL' : 'RESPONSES');
+            setCurrentPage(1);
+          }}
+          className={`cursor-pointer p-3.5 sm:p-4 rounded-2xl border transition-all ${
+            statusFilter === 'RESPONSES'
+              ? 'bg-teal-700 text-white border-teal-700 shadow-sm ring-2 ring-teal-500/20'
+              : 'bg-white text-slate-800 border-slate-200 hover:border-teal-200 hover:bg-teal-50/40 shadow-xs'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className={`text-[11px] font-bold uppercase tracking-wider ${statusFilter === 'RESPONSES' ? 'text-teal-100' : 'text-teal-700'}`}>
+              Responses
+            </span>
+            <MessageSquare className={`w-4 h-4 ${statusFilter === 'RESPONSES' ? 'text-teal-200' : 'text-teal-600'}`} />
+          </div>
+          <p className="text-xl sm:text-2xl font-black mt-1">{counts.responses}</p>
+          <p className={`text-[10px] mt-0.5 flex items-center gap-1.5 ${statusFilter === 'RESPONSES' ? 'text-teal-100' : 'text-slate-500'}`}>
+            {counts.unread_responses > 0 ? (
+              <span className="inline-flex items-center gap-1 font-bold text-rose-500 bg-rose-50 px-1.5 py-0.2 rounded">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                {counts.unread_responses} unread
+              </span>
+            ) : (
+              <span>People replied</span>
+            )}
           </p>
         </div>
       </div>
@@ -528,26 +613,108 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
           </div>
         </div>
 
-        {/* Status Filter Buttons */}
-        <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100">
-          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Status:</span>
-          {['ALL', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'QUEUED', 'SKIPPED'].map((st) => (
+        {/* Status Filter Buttons and Date Filter */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">Status:</span>
+            {['ALL', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'QUEUED', 'SKIPPED', 'RESPONSES'].map((st) => (
+              <button
+                key={st}
+                onClick={() => {
+                  setStatusFilter(st);
+                  setCurrentPage(1);
+                  setSelectedIds([]);
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                  statusFilter === st
+                    ? st === 'RESPONSES'
+                      ? 'bg-teal-600 text-white shadow-xs ring-2 ring-teal-500/20'
+                      : 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <span>{st}</span>
+                {st === 'RESPONSES' && counts.responses > 0 && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                      statusFilter === 'RESPONSES'
+                        ? 'bg-teal-700 text-white'
+                        : 'bg-teal-100 text-teal-800'
+                    }`}
+                  >
+                    {counts.responses}
+                  </span>
+                )}
+                {st === 'RESPONSES' && counts.unread_responses > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" title={`${counts.unread_responses} unread`} />
+                )}
+              </button>
+            ))}
+
+            {/* 🟢 Quick Toggle: Show Unread Only */}
             <button
-              key={st}
+              type="button"
               onClick={() => {
-                setStatusFilter(st);
+                setShowUnreadOnly((prev) => !prev);
                 setCurrentPage(1);
                 setSelectedIds([]);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-                statusFilter === st
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ml-1 ${
+                showUnreadOnly
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm ring-2 ring-emerald-500/20'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
               }`}
+              title="Filter down to parents who are waiting for an answer"
             >
-              {st}
+              <span className={`w-2 h-2 rounded-full ${showUnreadOnly ? 'bg-white' : 'bg-emerald-500 animate-pulse'}`} />
+              <span>Show Unread Only</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                  showUnreadOnly ? 'bg-emerald-700 text-white' : 'bg-emerald-200 text-emerald-900'
+                }`}
+              >
+                {counts.unread_chats}
+              </span>
             </button>
-          ))}
+          </div>
+
+          {/* Response Date Filter */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700">
+              <Calendar className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                {statusFilter === 'RESPONSES' ? 'Response Date:' : 'Date Filter:'}
+              </span>
+              <input
+                type="date"
+                value={responseDateFilter}
+                onChange={(e) => {
+                  setResponseDateFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="bg-transparent text-xs text-slate-800 outline-none cursor-pointer"
+                title="Filter by response date (leave empty to show all responded logs)"
+              />
+              {responseDateFilter && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResponseDateFilter('');
+                    setCurrentPage(1);
+                  }}
+                  className="p-0.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-700"
+                  title="Clear date filter (show all)"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            {responseDateFilter && (
+              <span className="text-[11px] font-medium text-teal-700 bg-teal-50 px-2 py-0.5 rounded-lg border border-teal-200">
+                Filtered: {new Date(responseDateFilter).toLocaleDateString()}
+              </span>
+            )}
+          </div>
 
           {campaignFilter !== 'ALL' && (
             <button
@@ -688,11 +855,35 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
                       <td className="px-4 py-4 font-bold text-slate-900">
                         <button
                           onClick={() => handleOpenConversation(log)}
-                          className="hover:text-emerald-600 hover:underline text-left transition-colors font-bold"
+                          className="hover:text-emerald-600 hover:underline text-left transition-colors font-bold block"
                           title="Click to view conversation"
                         >
                           {log.student_name || `Student #${log.student_id || '-'}`}
                         </button>
+                        {log.has_response && (
+                          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                              <MessageSquare className="w-2.5 h-2.5 text-teal-600" />
+                              {log.response_count} repl{log.response_count === 1 ? 'y' : 'ies'}
+                            </span>
+                            {log.unread_count > 0 && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-600 border border-rose-200 animate-pulse">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                {log.unread_count} unread
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {log.latest_response_text && (
+                          <div className="text-[11px] text-teal-900 bg-teal-50/80 p-1.5 rounded-lg border border-teal-100 mt-1 max-w-xs font-normal" title={log.latest_response_text}>
+                            <p className="line-clamp-2 italic">"{log.latest_response_text}"</p>
+                            {log.latest_response_at && (
+                              <span className="block text-[10px] text-teal-600/80 font-mono mt-0.5">
+                                {new Date(log.latest_response_at).toLocaleString()}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-4 font-mono text-xs text-slate-700">
                         {log.masked_number || log.recipient_number}
@@ -703,7 +894,15 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
                         </span>
                       </td>
                       <td className="px-4 py-4">
-                        <StatusBadge status={log.status} />
+                        <div className="flex flex-col gap-1 items-start">
+                          <StatusBadge status={log.status} />
+                          {log.has_response && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
+                              RESPONDED
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-4">
                         {log.whatsapp_message_id ? (
@@ -735,11 +934,20 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
                         <div className="inline-flex items-center gap-1.5">
                           <button
                             onClick={() => handleOpenConversation(log)}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white rounded-xl text-xs font-semibold border border-emerald-200 hover:border-emerald-600 transition-all shadow-2xs group"
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition-all shadow-2xs group ${
+                              log.unread_count > 0
+                                ? 'bg-teal-600 hover:bg-teal-700 text-white border-teal-600 shadow-sm'
+                                : 'bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border-emerald-200 hover:border-emerald-600'
+                            }`}
                             title="View conversation history with this user"
                           >
-                            <MessageSquare className="w-3.5 h-3.5 text-emerald-600 group-hover:text-white transition-colors" />
+                            <MessageSquare className={`w-3.5 h-3.5 ${log.unread_count > 0 ? 'text-white' : 'text-emerald-600 group-hover:text-white'} transition-colors`} />
                             <span>Chat</span>
+                            {log.unread_count > 0 && (
+                              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-white text-teal-800">
+                                {log.unread_count}
+                              </span>
+                            )}
                           </button>
                           <button
                             disabled={isDeleting}
@@ -900,7 +1108,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
       {/* Side Conversation Drawer (24h Window Chat Enabled) */}
       <ConversationDrawer
         isOpen={!!activeConversation}
-        onClose={() => setActiveConversation(null)}
+        onClose={handleCloseConversation}
         studentId={activeConversation?.studentId}
         phoneNumber={activeConversation?.phoneNumber}
         studentName={activeConversation?.studentName}

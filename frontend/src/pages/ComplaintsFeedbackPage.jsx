@@ -63,6 +63,7 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
   const [selectedItem, setSelectedItem] = useState(null);
   const [adminReplyText, setAdminReplyText] = useState('');
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [notifyParentOnResolve, setNotifyParentOnResolve] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
 
   // Chat Conversation Drawer state
@@ -143,7 +144,7 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
   }, [fetchData]);
 
   // Update status or reply
-  const handleUpdateStatus = async (item, newStatus, reply = null, shouldClose = false) => {
+  const handleUpdateStatus = async (item, newStatus, reply = null, shouldClose = false, notifyParent = false) => {
     setUpdatingStatus(true);
     if (shouldClose) {
       setSelectedItem(null);
@@ -154,6 +155,9 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
       if (reply !== null) {
         payload.admin_reply = reply;
       }
+      if (newStatus === 'RESOLVED') {
+        payload.notify_parent = notifyParent;
+      }
       const updated = await api.updateComplaintFeedback(item.id, payload);
       setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, ...updated } : it)));
       if (!shouldClose) {
@@ -162,7 +166,9 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
       showToast?.({
         type: 'success',
         title: 'Saved Successfully',
-        message: 'Record updated successfully.',
+        message: notifyParent && newStatus === 'RESOLVED'
+          ? 'Complaint marked Resolved & WhatsApp confirmation sent to parent!'
+          : 'Record updated successfully.',
       });
       fetchData(true);
     } catch (err) {
@@ -864,7 +870,8 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
                         selectedItem,
                         'RESOLVED',
                         adminReplyText !== '' ? adminReplyText : selectedItem.admin_reply,
-                        false
+                        false,
+                        notifyParentOnResolve
                       )
                     }
                     disabled={updatingStatus}
@@ -877,6 +884,28 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Mark Resolved
                   </button>
+                </div>
+
+                {/* 📲 Send WhatsApp Confirmation to Parent */}
+                <div className="mt-3 p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200/90 flex items-start gap-3">
+                  <input
+                    id="notifyParentResolveCheckbox"
+                    type="checkbox"
+                    checked={notifyParentOnResolve}
+                    onChange={(e) => setNotifyParentOnResolve(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-emerald-300 cursor-pointer shrink-0"
+                  />
+                  <label htmlFor="notifyParentResolveCheckbox" className="text-xs cursor-pointer select-none">
+                    <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <span>Send WhatsApp confirmation to parent upon resolution</span>
+                      <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-200 text-emerald-900">
+                        WhatsApp
+                      </span>
+                    </span>
+                    <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
+                      &ldquo;Your {selectedItem.submission_type === 'COMPLAINT' ? 'complaint' : 'feedback'} regarding {getCategoryLabel(selectedItem.category)} has been addressed by school management.&rdquo;
+                    </p>
+                  </label>
                 </div>
               </div>
             </div>

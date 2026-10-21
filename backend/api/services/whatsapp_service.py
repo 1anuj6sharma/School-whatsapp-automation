@@ -657,6 +657,145 @@ class WhatsAppService:
             "meta_error": {"type": "MaxRetriesExceeded"},
         }
 
+    async def upload_media_to_meta(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        mime_type: str,
+    ) -> Optional[str]:
+        phone_id = self.get_phone_number_id()
+        token = self.get_access_token()
+        if not phone_id or not token:
+            logger.error("[WhatsAppService] Cannot upload media: credentials missing.")
+            return None
+
+        url = f"https://graph.facebook.com/{self.api_version}/{phone_id}/media"
+        headers = {"Authorization": f"Bearer {token}"}
+        files = {"file": (filename, file_bytes, mime_type)}
+        data = {"messaging_product": "whatsapp", "type": mime_type}
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.post(url, headers=headers, files=files, data=data)
+                if res.status_code in (200, 201):
+                    res_json = res.json()
+                    media_id = res_json.get("id")
+                    logger.info(f"[WhatsAppService] Uploaded media to Meta. ID: {media_id}")
+                    return media_id
+                else:
+                    logger.error(f"[WhatsAppService] Meta media upload failed ({res.status_code}): {res.text}")
+        except Exception as e:
+            logger.error(f"[WhatsAppService] Exception uploading media to Meta: {e}")
+        return None
+
+    async def send_media_message(
+        self,
+        recipient_number: str,
+        media_url: str,
+        media_type: str = "image",  # "image" or "document"
+        caption: str = "",
+        filename: str = "",
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
+        phone_id = self.get_phone_number_id()
+        token = self.get_access_token()
+
+        if not phone_id or not token:
+            err_msg = "Meta WhatsApp credentials not configured. Please set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN."
+            return {"success": False, "error": err_msg}
+
+        sanitized_recipient = sanitize_phone_number(recipient_number)
+        masked = mask_phone_number(sanitized_recipient)
+
+        # Attempt to upload local file directly to Meta for 100% reliable delivery
+        media_id = None
+        if media_url and ("/uploads/" in media_url or not media_url.startswith("http")):
+            try:
+                base_name = os.path.basename(media_url)
+                local_path = os.path.join(settings.MEDIA_ROOT, base_name)
+                if os.path.isfile(local_path):
+                    ext = Path(local_path).suffix.lower()
+                    mime_type = "application/pdf" if ext == ".pdf" else f"image/{ext.replace('.', '')}"
+                    if mime_type == "image/jpg":
+                        mime_type = "image/jpeg"
+                    with open(local_path, "rb") as f:
+                        file_bytes = f.read()
+                    media_id = await self.upload_media_to_meta(
+                        file_bytes=file_bytes,
+                        filename=filename or base_name,
+                        mime_type=mime_type,
+                    )
+            except Exception as e:
+                logger.warning(f"[WhatsAppService] Could not pre-upload local file to Meta: {e}")
+
+        # Construct payload
+        media_obj: Dict[str, Any] = {}
+        if media_id:
+            media_obj["id"] = media_id
+        else:
+            media_obj["link"] = media_url
+
+        if caption:
+            media_obj["caption"] = caption
+        if media_type == "document" and filename:
+            media_obj["filename"] = filename
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": sanitized_recipient,
+            "type": media_type,
+            media_type: media_obj,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        retry_count = 0
+        backoff_delay = 1.0
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            while retry_count <= max_retries:
+                try:
+                    logger.info(f"[WhatsAppService] Dispatching {media_type} message to {masked}")
+                    response = await client.post(self.base_url, headers=headers, json=payload)
+                    response_json = response.json()
+
+                    if response.status_code in (200, 201):
+                        messages = response_json.get("messages", [])
+                        message_id = messages[0].get("id") if messages else None
+                        return {
+                            "success": True,
+                            "message_id": message_id,
+                            "recipient": sanitized_recipient,
+                            "response_data": response_json,
+                        }
+
+                    meta_error = response_json.get("error", {})
+                    error_message = (
+                        meta_error.get("message")
+                        or meta_error.get("error_user_msg")
+                        or f"Meta API error (HTTP {response.status_code})"
+                    )
+                    logger.error(f"[WhatsAppService] Meta API rejected {media_type} message for {masked}: {error_message}")
+                    return {
+                        "success": False,
+                        "error": error_message,
+                        "meta_error": meta_error,
+                        "status_code": response.status_code,
+                    }
+                except Exception as ex:
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        await asyncio.sleep(backoff_delay)
+                        backoff_delay *= 2
+                    else:
+                        return {"success": False, "error": str(ex)}
+
+        return {"success": False, "error": "Failed after maximum retries."}
+
 
     async def fetch_templates_from_meta(self) -> List[Dict[str, Any]]:
         waba_id = self.get_waba_id()

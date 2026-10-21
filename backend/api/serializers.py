@@ -195,6 +195,11 @@ class TemplateUpdateMetaSerializer(serializers.Serializer):
 
 class MessageLogSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source="student.student_name", read_only=True, default=None)
+    has_response = serializers.BooleanField(read_only=True, default=False)
+    response_count = serializers.IntegerField(read_only=True, default=0)
+    unread_count = serializers.IntegerField(read_only=True, default=0)
+    latest_response_at = serializers.DateTimeField(read_only=True, default=None)
+    latest_response_text = serializers.CharField(read_only=True, default=None)
 
     class Meta:
         model = MessageLog
@@ -213,6 +218,11 @@ class MessageLogSerializer(serializers.ModelSerializer):
             "read_at",
             "failed_at",
             "created_at",
+            "has_response",
+            "response_count",
+            "unread_count",
+            "latest_response_at",
+            "latest_response_text",
         ]
 
 
@@ -311,13 +321,17 @@ class SendConversationMessageSerializer(serializers.Serializer):
     template_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     language_code = serializers.CharField(required=False, default="en_US")
     parameters = serializers.ListField(child=serializers.CharField(), required=False, allow_null=True)
+    media_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    media_type = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="document")
+    filename = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     def validate(self, data):
         if not data.get("student_id") and not data.get("phone_number"):
             raise serializers.ValidationError("Either student_id or phone_number is required.")
-        if not data.get("message") and not data.get("template_name"):
-            raise serializers.ValidationError("Either message (text) or template_name is required.")
+        if not data.get("message") and not data.get("template_name") and not data.get("media_url"):
+            raise serializers.ValidationError("Either message (text), template_name, or media_url is required.")
         return data
+
 
 
 # ─── Bot / Chatbot Serializers ────────────────────────────────────────────────

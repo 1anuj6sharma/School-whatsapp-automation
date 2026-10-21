@@ -111,6 +111,39 @@ export const ConversationDrawer = ({
   const displayName = student?.student_name || conversation?.recipient_name || initialStudentName || 'User Conversation';
   const displayPhone = student?.whatsapp_number || conversation?.phone_number || phoneNumber || '';
 
+  // Determine WhatsApp 24-hour customer service window status
+  const lastInboundMsg = [...messages].reverse().find((m) => m.direction === 'INBOUND');
+  const windowStatus = (() => {
+    if (!lastInboundMsg?.created_at) {
+      return {
+        isActive: false,
+        label: '24h Window Inactive',
+        remainingText: '',
+        tooltip: 'No inbound message received from parent yet. Direct text might be restricted by Meta; approved Templates can be sent anytime.',
+      };
+    }
+    const msgTime = new Date(lastInboundMsg.created_at).getTime();
+    const elapsedMs = Date.now() - msgTime;
+    const windowDurationMs = 24 * 60 * 60 * 1000;
+    if (elapsedMs < windowDurationMs && elapsedMs >= 0) {
+      const remainingMs = windowDurationMs - elapsedMs;
+      const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+      const minutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+      return {
+        isActive: true,
+        label: '24h Window Active',
+        remainingText: `${hours}h ${minutes}m left`,
+        tooltip: `Active 24h WhatsApp conversation window (${hours}h ${minutes}m left). Direct custom chat replies allowed.`,
+      };
+    }
+    return {
+      isActive: false,
+      label: '24h Window Expired',
+      remainingText: '',
+      tooltip: 'More than 24 hours have elapsed since the parent last replied. Use Templates to reach out.',
+    };
+  })();
+
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const text = inputMessage.trim();
@@ -247,6 +280,17 @@ export const ConversationDrawer = ({
                   </h3>
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-400/20 text-emerald-100 border border-emerald-400/30">
                     WhatsApp Live
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                      windowStatus.isActive
+                        ? 'bg-emerald-300/25 text-emerald-100 border-emerald-300/40'
+                        : 'bg-amber-400/20 text-amber-100 border-amber-400/30'
+                    }`}
+                    title={windowStatus.tooltip}
+                  >
+                    <Clock className="w-2.5 h-2.5" />
+                    <span>{windowStatus.isActive ? `24h: ${windowStatus.remainingText}` : '24h Inactive'}</span>
                   </span>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-emerald-100/80 font-mono mt-0.5 truncate">
@@ -470,31 +514,60 @@ export const ConversationDrawer = ({
                     <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
                     <span className="truncate">{sendError}</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setSendError('')}
-                    className="text-rose-500 hover:text-rose-700 p-1"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowTemplates(true);
+                        setSendError('');
+                      }}
+                      className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white font-medium text-[11px] transition-colors"
+                    >
+                      Use Template
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSendError('')}
+                      className="text-rose-500 hover:text-rose-700 p-1"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               )}
 
               {/* Interactive Chat Input Area */}
               <div className="p-3 sm:p-4 bg-white border-t border-slate-200 shrink-0">
                 <div className="flex items-center justify-between mb-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowTemplates(!showTemplates)}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                      showTemplates
-                        ? 'bg-emerald-100 text-emerald-800 font-semibold'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                    {showTemplates ? 'Hide Templates' : 'Templates'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowTemplates(!showTemplates)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                        showTemplates
+                          ? 'bg-emerald-100 text-emerald-800 font-semibold'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                      {showTemplates ? 'Hide Templates' : 'Templates'}
+                    </button>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
+                        windowStatus.isActive
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-amber-50 text-amber-700 border-amber-200'
+                      }`}
+                      title={windowStatus.tooltip}
+                    >
+                      <Clock className="w-3 h-3" />
+                      <span>
+                        {windowStatus.isActive
+                          ? `24h Window: ${windowStatus.remainingText}`
+                          : '24h Window Closed (Use Templates)'}
+                      </span>
+                    </span>
+                  </div>
                   <span className="text-[11px] text-slate-400 font-mono">
                     {inputMessage.length > 0 ? `${inputMessage.length} chars` : 'Enter ↵ to send'}
                   </span>

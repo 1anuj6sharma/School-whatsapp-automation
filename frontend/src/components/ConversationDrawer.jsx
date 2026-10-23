@@ -31,7 +31,8 @@ export const ConversationDrawer = ({
 }) => {
   const [loading, setLoading] = useState(true);
   const [conversation, setConversation] = useState(null);
-  const [autoScroll, setAutoScroll] = useState(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [inputMessage, setInputMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
@@ -46,10 +47,37 @@ export const ConversationDrawer = ({
 
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const isAtBottomRef = useRef(true);
+  const prevMessagesCountRef = useRef(0);
+  const initialScrollDoneRef = useRef(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
 
   const identifier = studentId || phoneNumber;
+
+  const scrollToBottom = (behavior = 'smooth') => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior });
+    } else if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+    setIsAtBottom(true);
+    isAtBottomRef.current = true;
+    setUnreadCount(0);
+  };
+
+  const handleScroll = () => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    // Check if user is near bottom (within 80px)
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distanceToBottom < 80;
+    isAtBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
+    if (atBottom) {
+      setUnreadCount(0);
+    }
+  };
 
   const fetchConversation = async (showLoading = true) => {
     if (!identifier) return;
@@ -66,6 +94,11 @@ export const ConversationDrawer = ({
 
   useEffect(() => {
     if (isOpen && identifier) {
+      initialScrollDoneRef.current = false;
+      prevMessagesCountRef.current = 0;
+      setIsAtBottom(true);
+      isAtBottomRef.current = true;
+      setUnreadCount(0);
       fetchConversation(true);
       setSendError('');
       // Auto-poll conversation updates every 4 seconds
@@ -77,10 +110,38 @@ export const ConversationDrawer = ({
   }, [isOpen, identifier]);
 
   useEffect(() => {
-    if (autoScroll && messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (!isOpen) return;
+    const currentMessages = conversation?.messages || [];
+    const currentCount = currentMessages.length;
+    const prevCount = prevMessagesCountRef.current;
+
+    if (currentCount === 0) return;
+
+    // Initial load for this conversation
+    if (!initialScrollDoneRef.current) {
+      setTimeout(() => {
+        scrollToBottom('auto');
+        initialScrollDoneRef.current = true;
+      }, 60);
+      prevMessagesCountRef.current = currentCount;
+      return;
     }
-  }, [conversation?.messages, autoScroll]);
+
+    // New messages arrived while conversation is open
+    if (currentCount > prevCount) {
+      const newIncoming = currentCount - prevCount;
+      if (isAtBottomRef.current) {
+        // User was already at the bottom: smoothly scroll to bottom to view new messages
+        scrollToBottom('smooth');
+      } else {
+        // User is scrolled up reading earlier history:
+        // DO NOT scroll! Keep position fixed and increment unread badge counter
+        setUnreadCount((prev) => prev + newIncoming);
+      }
+    }
+
+    prevMessagesCountRef.current = currentCount;
+  }, [conversation?.messages, isOpen]);
 
   // Handle escape key to close
   useEffect(() => {
@@ -244,9 +305,7 @@ export const ConversationDrawer = ({
         handleClearFile();
         await fetchConversation(false);
         setTimeout(() => {
-          if (messagesEndRef.current) {
-            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-          }
+          scrollToBottom('smooth');
         }, 150);
       } else {
         const errMsg = res?.error || 'Failed to send WhatsApp message.';
@@ -277,9 +336,7 @@ export const ConversationDrawer = ({
         setShowTemplates(false);
         await fetchConversation(false);
         setTimeout(() => {
-          if (messagesEndRef.current) {
-            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-          }
+          scrollToBottom('smooth');
         }, 150);
       } else {
         setSendError(res?.error || 'Failed to send template message.');
@@ -428,15 +485,17 @@ export const ConversationDrawer = ({
             </div>
           )}
 
-          {/* Chat Messages Container */}
-          <div
-            ref={chatContainerRef}
-            className="flex-1 overflow-y-auto p-4 sm:p-5 bg-slate-50/80 space-y-3.5 relative"
-            style={{
-              backgroundImage: 'radial-gradient(rgba(16, 185, 129, 0.04) 1px, transparent 0)',
-              backgroundSize: '16px 16px',
-            }}
-          >
+          {/* Chat Messages Container Area */}
+          <div className="flex-1 relative min-h-0 flex flex-col">
+            <div
+              ref={chatContainerRef}
+              onScroll={handleScroll}
+              className="flex-1 overflow-y-auto p-4 sm:p-5 bg-slate-50/80 space-y-3.5"
+              style={{
+                backgroundImage: 'radial-gradient(rgba(16, 185, 129, 0.04) 1px, transparent 0)',
+                backgroundSize: '16px 16px',
+              }}
+            >
             {loading && messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
                 <RefreshCw className="w-6 h-6 animate-spin text-emerald-600" />
@@ -576,7 +635,26 @@ export const ConversationDrawer = ({
                 );
               })
             )}
-            <div ref={messagesEndRef} />
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* WhatsApp-style Floating Scroll to Bottom Button */}
+            {!isAtBottom && (
+              <button
+                type="button"
+                onClick={() => scrollToBottom('smooth')}
+                className="absolute bottom-4 right-4 z-20 w-10 h-10 rounded-full bg-white shadow-lg border border-slate-200/90 flex items-center justify-center text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/60 hover:border-emerald-300 transition-all transform hover:scale-105 active:scale-95 group focus:outline-none cursor-pointer"
+                title="Scroll to latest message"
+                aria-label="Scroll to bottom"
+              >
+                <ChevronDown className="w-5 h-5 group-hover:translate-y-0.5 transition-transform" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center shadow-md animate-bounce">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
 
           {/* Conditional Messaging or Read-only Footer */}

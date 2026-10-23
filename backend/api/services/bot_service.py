@@ -120,8 +120,12 @@ STRINGS = {
         "invalid_option": "❓ Sorry, I didn't understand that. Please send *1* or *2* to choose an option.",
         "invalid_category": "❓ Please send *1*, *2*, *3*, or *4* to choose a category.",
         "fee_payment_bilingual": (
-            "You can pay school fees online via UPI/Bank transfer or visit the school accounts counter.\n\n"
+            "💳 You can pay school fees online via UPI/Bank transfer or visit the school accounts counter.\n\n"
             "आप स्कूल फीस का भुगतान ऑनलाइन UPI/बैंक ट्रांसफर या स्कूल काउंटर पर कर सकते हैं।"
+        ),
+        "admission_query_bilingual": (
+            "🏫 For admission or general queries, please contact the school office / administration.\n\n"
+            "एडमिशन या किसी भी सामान्य जानकारी के लिए कृपया स्कूल कार्यालय से संपर्क करें।"
         ),
         "fee_info": (
             "You can pay school fees online via UPI/Bank transfer or visit the school accounts counter.\n\n"
@@ -183,8 +187,12 @@ STRINGS = {
         "invalid_option": "❓ क्षमा करें, मैं समझ नहीं पाया। कृपया *1* या *2* भेजें।",
         "invalid_category": "❓ कृपया श्रेणी चुनने के लिए *1*, *2*, *3* या *4* भेजें।",
         "fee_payment_bilingual": (
-            "आप स्कूल फीस का भुगतान ऑनलाइन UPI/बैंक ट्रांसफर या स्कूल काउंटर पर कर सकते हैं।\n\n"
+            "💳 आप स्कूल फीस का भुगतान ऑनलाइन UPI/बैंक ट्रांसफर या स्कूल काउंटर पर कर सकते हैं।\n\n"
             "You can pay school fees online via UPI/Bank transfer or visit the school accounts counter."
+        ),
+        "admission_query_bilingual": (
+            "🏫 एडमिशन या किसी भी सामान्य जानकारी के लिए कृपया स्कूल कार्यालय से संपर्क करें।\n\n"
+            "For admission or general queries, please contact the school office / administration."
         ),
         "fee_info": (
             "आप स्कूल फीस का भुगतान ऑनलाइन UPI/बैंक ट्रांसफर या स्कूल काउंटर पर कर सकते हैं।\n\n"
@@ -316,6 +324,33 @@ def _is_change_language_intent(text: str) -> bool:
     return False
 
 
+def _is_payment_query(text: str) -> bool:
+    """Detect if user is asking about fee payments, online payment, dues, etc."""
+    if not text:
+        return False
+    t = text.strip().lower()
+    fee_keywords = (
+        "fee", "fees", "pay", "payment", "online", "upi", "qr", "bank",
+        "account", "due", "dues", "किस्त", "फीस", "पेमेंट", "ऑनलाइन", "पे",
+        "can i pay", "pay online", "online pay", "online payment"
+    )
+    return any(w in t for w in fee_keywords)
+
+
+def _is_admission_or_general_query(text: str) -> bool:
+    """Detect if user is asking about admissions, general inquiry, or school contact."""
+    if not text:
+        return False
+    t = text.strip().lower()
+    query_keywords = (
+        "admission", "admissions", "admission related", "new admission",
+        "query", "queries", "enquiry", "inquiry", "contact", "contact school",
+        "office", "phone", "call", "helpdesk", "question", "doubt",
+        "एडमिशन", "प्रवेश", "पूछताछ", "संपर्क", "जानकारी"
+    )
+    return any(w in t for w in query_keywords)
+
+
 # ---------------------------------------------------------------------------
 # Gemini contextual reply (optional — used only if GEMINI_API_KEY is set)
 # ---------------------------------------------------------------------------
@@ -408,9 +443,9 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
         )
 
         if is_greeting:
-            # If user has ALREADY selected a language previously (not in initial INIT / WELCOME / WELCOME_AFTER_FEE / AWAIT_LANG)
+            # If user has ALREADY selected a language previously (not in initial INIT / WELCOME / WELCOME_AFTER_QUERY / WELCOME_AFTER_FEE / AWAIT_LANG)
             # Use their known language directly and show Main Menu without re-asking for language!
-            if not is_new and profile.conversation_state not in ("INIT", "WELCOME", "WELCOME_AFTER_FEE", "AWAIT_LANG"):
+            if not is_new and profile.conversation_state not in ("INIT", "WELCOME", "WELCOME_AFTER_QUERY", "WELCOME_AFTER_FEE", "AWAIT_LANG"):
                 logger.info(f"[BotService] Existing user {phone} greeted with known language: {profile.language}")
                 profile.conversation_state = "MENU"
                 profile.pending_type = None
@@ -431,7 +466,7 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
 
         state = profile.conversation_state
 
-        # ── INIT (First message / response: bilingual welcome + how may I help you) ──
+        # ── INIT (First message / start of chatting: welcome message) ─────
         if state == "INIT":
             if display_name and display_name.strip() and display_name.strip() != "WhatsApp User":
                 greeting = _t(profile, "welcome_help_named", name=display_name.strip())
@@ -442,23 +477,24 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
             profile.save(update_fields=["conversation_state", "updated_at"])
             return
 
-        # ── WELCOME (User says something again after initial welcome) ──────
-        if state == "WELCOME":
-            fee_keywords = ("fee", "fees", "pay", "payment", "online", "upi", "qr", "bank", "account", "due", "dues", "किस्त", "फीस", "पेमेंट")
-            if any(w in text_lower for w in fee_keywords):
-                # Send payment info in English & Hindi both
+        # ── Global Interceptions (when not actively typing free-text in AWAIT_MESSAGE) ──
+        if state != "AWAIT_MESSAGE":
+            # 1. Payment / Fee Query ("can i pay online", "fees", "upi", etc.)
+            if _is_payment_query(text_lower):
                 _send_text_sync(phone, _t(profile, "fee_payment_bilingual"), student=student)
-                profile.conversation_state = "WELCOME_AFTER_FEE"
+                profile.conversation_state = "WELCOME_AFTER_QUERY"
                 profile.save(update_fields=["conversation_state", "updated_at"])
                 return
 
-            _send_text_sync(phone, _t(profile, "lang_selection"), student=student)
-            profile.conversation_state = "AWAIT_LANG"
-            profile.save(update_fields=["conversation_state", "updated_at"])
-            return
+            # 2. Admission or General Query ("admission related", "query", etc.)
+            if _is_admission_or_general_query(text_lower):
+                _send_text_sync(phone, _t(profile, "admission_query_bilingual"), student=student)
+                profile.conversation_state = "WELCOME_AFTER_QUERY"
+                profile.save(update_fields=["conversation_state", "updated_at"])
+                return
 
-        # ── WELCOME_AFTER_FEE (User says something again after payment info → ask language) ──
-        if state == "WELCOME_AFTER_FEE":
+        # ── WELCOME or WELCOME_AFTER_QUERY (User says something next → ask language) ──
+        if state in ("WELCOME", "WELCOME_AFTER_QUERY", "WELCOME_AFTER_FEE"):
             _send_text_sync(phone, _t(profile, "lang_selection"), student=student)
             profile.conversation_state = "AWAIT_LANG"
             profile.save(update_fields=["conversation_state", "updated_at"])

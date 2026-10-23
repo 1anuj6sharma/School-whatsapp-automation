@@ -201,6 +201,7 @@ class BotUserProfile(models.Model):
     CONVERSATION_STATE_CHOICES = [
         ("INIT", "Initial greeting"),
         ("WELCOME", "Welcome message sent, awaiting reply"),
+        ("WELCOME_AFTER_QUERY", "Query answered, awaiting reply"),
         ("WELCOME_AFTER_FEE", "Payment info sent, awaiting reply"),
         ("AWAIT_LANG", "Awaiting language selection"),
         ("MENU", "Main menu shown"),

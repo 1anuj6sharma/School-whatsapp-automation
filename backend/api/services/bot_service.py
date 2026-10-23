@@ -211,7 +211,7 @@ STRINGS = {
     },
 }
 
-SCHOOL_NAME = "Wonder School"
+SCHOOL_NAME = "Wonder World School"
 
 # Number → menu-option map (Only Complaint and Feedback)
 MENU_MAP = {"1": "COMPLAINT", "2": "FEEDBACK"}

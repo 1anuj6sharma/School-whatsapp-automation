@@ -312,12 +312,21 @@ export const SendMessagePage = ({
           initialStudentIds.length > 0
         ) {
           initialAppliedRef.current = true;
-          const matchedIds = data
+          let matchedIds = data
             .filter((s) => initialStudentIds.includes(s.id) && s.whatsapp_opt_in)
             .map((s) => s.id);
+
+          if (activeWorkflow === 'FEES') {
+            matchedIds = data
+              .filter((s) => initialStudentIds.includes(s.id) && s.whatsapp_opt_in && Number(s.fees_due || 0) > 0)
+              .map((s) => s.id);
+          }
+
           setSelectedStudentIds(matchedIds);
           if (matchedIds.length > 0) {
             setPreviewStudentId(matchedIds[0]);
+          } else if (eligible.length > 0) {
+            setPreviewStudentId(eligible[0].id);
           } else if (data.length > 0) {
             setPreviewStudentId(data[0].id);
           } else {
@@ -551,15 +560,13 @@ export const SendMessagePage = ({
     return resolved;
   };
 
-  // Workflow-eligible students (For FEES: students with pending fees > 0 OR explicitly selected from student section. For others: all class students)
+  // Workflow-eligible students (For FEES: only students with pending fees > 0. For others: all class students)
   const workflowStudents = useMemo(() => {
     if (activeWorkflow === 'FEES') {
-      return students.filter(
-        (s) => Number(s.fees_due || 0) > 0 || (initialStudentIds && initialStudentIds.includes(s.id))
-      );
+      return students.filter((s) => Number(s.fees_due || 0) > 0);
     }
     return students;
-  }, [students, activeWorkflow, initialStudentIds]);
+  }, [students, activeWorkflow]);
 
   // Selected student for preview
   const previewStudent =

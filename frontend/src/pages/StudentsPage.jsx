@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   Users,
   UserPlus,
@@ -129,6 +129,12 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
     }
   };
 
+  const feesDueSelectedCount = useMemo(() => {
+    return students.filter(
+      (s) => selectedStudentIds.includes(s.id) && Number(s.fees_due || 0) > 0
+    ).length;
+  }, [students, selectedStudentIds]);
+
   const handleWorkflowClick = (workflow) => {
     setActionMenuOpen(false);
     if (!onNavigateToSendMessage) return;
@@ -146,7 +152,27 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
       return;
     }
 
-    const selectedStudentObjects = students.filter((s) => targetIds.includes(s.id));
+    let selectedStudentObjects = students.filter((s) => targetIds.includes(s.id));
+
+    // For FEES workflow only: send only students with fees due (fees > 0)
+    if (workflow === 'FEES') {
+      const feesDueStudents = selectedStudentObjects.filter(
+        (s) => Number(s.fees_due || 0) > 0
+      );
+      if (feesDueStudents.length === 0) {
+        if (showToast) {
+          showToast({
+            type: 'warning',
+            title: 'No Pending Fees',
+            message: 'None of the selected students have pending fees due (fees > ₹0).',
+          });
+        }
+        return;
+      }
+      selectedStudentObjects = feesDueStudents;
+      targetIds = feesDueStudents.map((s) => s.id);
+    }
+
     const cSet = new Set();
     selectedStudentObjects.forEach((s) => {
       const cid = s.class_id || (s.school_class && s.school_class.id);
@@ -598,7 +624,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                         Fees Reminder
                       </p>
                       <p className="text-[10px] text-slate-500 leading-tight">
-                        Broadcast dues &amp; reminders to {selectedStudentIds.length} selected parents
+                        Broadcast dues &amp; reminders to {feesDueSelectedCount} selected parents with pending fees
                       </p>
                     </div>
                   </button>

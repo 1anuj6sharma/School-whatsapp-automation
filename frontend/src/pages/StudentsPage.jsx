@@ -24,11 +24,17 @@ import { api } from '../services/api';
 import { Modal } from '../components/Modal';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { EmptyState } from '../components/EmptyState';
+import { Pagination } from '../components/Pagination';
+
+const PAGE_SIZE = 10;
 
 export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
   const [students, setStudents] = useState([]);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Pagination state (10 records per page)
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Checkbox Selection state for Students
   const [selectedStudentIds, setSelectedStudentIds] = useState([]);
@@ -191,8 +197,28 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
     fetchData();
   }, [selectedClassIds.join(','), optInFilter, feeFilter]);
 
+  // Reset to first page when search or filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedClassIds.join(','), optInFilter, feeFilter, searchTerm]);
+
+  // Derived paginated slice of students (10 per page)
+  const totalPages = Math.max(1, Math.ceil(students.length / PAGE_SIZE));
+
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [totalPages, currentPage]);
+
+  const paginatedStudents = useMemo(() => {
+    const startIndex = (currentPage - 1) * PAGE_SIZE;
+    return students.slice(startIndex, startIndex + PAGE_SIZE);
+  }, [students, currentPage]);
+
   const handleSearchSubmit = (e) => {
     e.preventDefault();
+    setCurrentPage(1);
     fetchData();
   };
 
@@ -762,7 +788,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {students.map((student) => {
+                {paginatedStudents.map((student) => {
                   const isSelected = selectedStudentIds.includes(student.id);
                   return (
                     <tr
@@ -875,6 +901,15 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
               </tbody>
             </table>
           </div>
+
+          {/* 10 Students per page Pagination */}
+          <Pagination
+            currentPage={currentPage}
+            totalItems={students.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={setCurrentPage}
+            itemLabel="students"
+          />
         </div>
       )}
 

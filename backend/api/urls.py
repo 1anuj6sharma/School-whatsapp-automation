@@ -15,6 +15,7 @@ from .views import (
     MessageLogListView,
     MessageLogDetailView,
     MessageLogBulkDeleteView,
+    MessageLogExportView,
     TestMessageView,
     WhatsAppWebhookView,
     ConversationDetailView,
@@ -22,6 +23,7 @@ from .views import (
     EmbeddedSignupConfigView,
     EmbeddedSignupExchangeTokenView,
     MediaUploadView,
+    WhatsAppMediaProxyView,
     AuthLoginView,
     AuthMeView,
     AuthLogoutView,
@@ -64,6 +66,8 @@ urlpatterns = [
     # Media Upload API
     path("api/media/upload", MediaUploadView.as_view(), name="media-upload"),
     path("api/media/upload/", MediaUploadView.as_view(), name="media-upload-slash"),
+    path("api/media/whatsapp/<str:media_id>", WhatsAppMediaProxyView.as_view(), name="whatsapp-media-proxy"),
+    path("api/media/whatsapp/<str:media_id>/", WhatsAppMediaProxyView.as_view(), name="whatsapp-media-proxy-slash"),
 
     # Campaigns API
     path("api/campaigns", CampaignListCreateView.as_view(), name="campaign-list-create"),
@@ -76,6 +80,8 @@ urlpatterns = [
     path("api/campaigns/<int:pk>/retry-failed/", CampaignRetryView.as_view(), name="campaign-retry-slash"),
 
     # Message Logs API
+    path("api/message-logs/export", MessageLogExportView.as_view(), name="log-export"),
+    path("api/message-logs/export/", MessageLogExportView.as_view(), name="log-export-slash"),
     path("api/message-logs", MessageLogListView.as_view(), name="log-list"),
     path("api/message-logs/", MessageLogListView.as_view(), name="log-list-slash"),
     path("api/message-logs/bulk-delete", MessageLogBulkDeleteView.as_view(), name="log-bulk-delete"),

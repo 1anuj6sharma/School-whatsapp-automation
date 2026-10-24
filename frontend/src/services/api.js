@@ -293,6 +293,7 @@ export const api = {
     if (params?.campaign_id) url.searchParams.append('campaign_id', params.campaign_id.toString());
     if (params?.student_id) url.searchParams.append('student_id', params.student_id.toString());
     if (params?.status && params.status !== 'ALL') url.searchParams.append('status', params.status);
+    if (params?.date) url.searchParams.append('date', params.date);
     if (params?.from_date) url.searchParams.append('from_date', params.from_date);
     if (params?.to_date) url.searchParams.append('to_date', params.to_date);
     if (params?.before_date) url.searchParams.append('before_date', params.before_date);
@@ -301,6 +302,37 @@ export const api = {
 
     const res = await fetch(url.pathname + url.search);
     return handleResponse(res);
+  },
+
+  async exportMessageLogs(params = {}) {
+    const url = new URL(`${window.location.origin}/api/message-logs/export`);
+    if (params.campaign_id && params.campaign_id !== 'ALL') url.searchParams.append('campaign_id', params.campaign_id.toString());
+    if (params.status && params.status !== 'ALL') url.searchParams.append('status', params.status);
+    if (params.date) url.searchParams.append('date', params.date);
+    if (params.from_date) url.searchParams.append('from_date', params.from_date);
+    if (params.to_date) url.searchParams.append('to_date', params.to_date);
+    if (params.search) url.searchParams.append('search', params.search);
+    if (params.ids && params.ids.length > 0) url.searchParams.append('ids', params.ids.join(','));
+
+    const res = await fetch(url.pathname + url.search, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`Export failed (${res.status}): ${res.statusText}`);
+    }
+    const blob = await res.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    const contentDisposition = res.headers.get('Content-Disposition') || '';
+    let filename = 'Message_Delivery_Logs.xlsx';
+    const match = contentDisposition.match(/filename="?([^";]+)"?/);
+    if (match && match[1]) filename = match[1];
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(downloadUrl);
   },
 
   async deleteMessageLog(id) {

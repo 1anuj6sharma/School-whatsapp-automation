@@ -18,6 +18,8 @@ import {
   Paperclip,
   Download,
   Image as ImageIcon,
+  ZoomIn,
+  ExternalLink,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -44,6 +46,8 @@ export const ConversationDrawer = ({
   const [selectedFile, setSelectedFile] = useState(null);
   const [filePreview, setFilePreview] = useState(null);
   const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [previewImageModal, setPreviewImageModal] = useState(null);
+  const [previewPdfModal, setPreviewPdfModal] = useState(null);
 
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -553,65 +557,101 @@ export const ConversationDrawer = ({
                       )}
 
                       {/* Media Attachment: PDF Document or Image */}
-                      {msg.media_url && (() => {
-                        const fullUrl = msg.media_url.startsWith('http') || msg.media_url.startsWith('data:')
-                          ? msg.media_url
-                          : `${window.location.origin}${msg.media_url.startsWith('/') ? '' : '/'}${msg.media_url}`;
-                        const isPdf = msg.media_url.toLowerCase().endsWith('.pdf') || msg.message_type === 'document';
+                      {(() => {
+                        const effectiveMediaUrl = msg.media_url || (
+                          msg.message_type === 'image' && msg.raw_payload?.image?.id
+                            ? `/api/media/whatsapp/${msg.raw_payload.image.id}`
+                            : (msg.raw_payload?.document?.id ? `/api/media/whatsapp/${msg.raw_payload.document.id}` : null)
+                        );
+                        if (!effectiveMediaUrl) return null;
+
+                        const fullUrl = effectiveMediaUrl.startsWith('http') || effectiveMediaUrl.startsWith('data:')
+                          ? effectiveMediaUrl
+                          : `${window.location.origin}${effectiveMediaUrl.startsWith('/') ? '' : '/'}${effectiveMediaUrl}`;
+                        const isPdf = effectiveMediaUrl.toLowerCase().endsWith('.pdf') || 
+                          msg.message_type === 'document' || 
+                          Boolean(msg.raw_payload?.document) ||
+                          (msg.text_content && msg.text_content.toLowerCase().includes('document'));
 
                         if (isPdf) {
-                          const docName = msg.media_url.split('/').pop().replace(/^[a-f0-9]+_/, '') || 'Document.pdf';
+                          const docName = msg.raw_payload?.document?.filename || 
+                            (msg.text_content?.startsWith('📄 Document: ') ? msg.text_content.replace('📄 Document: ', '') : null) ||
+                            (effectiveMediaUrl.endsWith('.pdf') ? effectiveMediaUrl.split('/').pop().replace(/^[a-f0-9]+_/, '') : null) || 
+                            'Document.pdf';
                           return (
                             <div
-                              className={`mb-2.5 p-2.5 rounded-xl border flex items-center justify-between gap-3 ${
+                              className={`mb-2.5 p-3 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 transition-all shadow-xs ${
                                 isOutbound
                                   ? 'bg-emerald-700/80 border-emerald-500/50 text-white'
-                                  : 'bg-slate-50 border-slate-200 text-slate-800'
+                                  : 'bg-slate-50 border-slate-200/90 text-slate-800'
                               }`}
                             >
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <div className={`p-2 rounded-lg shrink-0 ${isOutbound ? 'bg-emerald-800/80 text-rose-200' : 'bg-rose-100 text-rose-600'}`}>
+                              <div 
+                                onClick={() => setPreviewPdfModal({ url: fullUrl, name: docName })}
+                                className="flex items-center gap-2.5 min-w-0 cursor-pointer flex-1"
+                                title="Click to view PDF"
+                              >
+                                <div className={`p-2 rounded-xl shrink-0 shadow-xs ${isOutbound ? 'bg-emerald-800/90 text-rose-200' : 'bg-rose-100 text-rose-600'}`}>
                                   <FileText className="w-5 h-5" />
                                 </div>
                                 <div className="min-w-0">
-                                  <p className="text-xs font-bold truncate max-w-[150px] sm:max-w-[190px]" title={docName}>
+                                  <p className="text-xs font-bold truncate max-w-[150px] sm:max-w-[180px]" title={docName}>
                                     {docName}
                                   </p>
                                   <p className={`text-[10px] ${isOutbound ? 'text-emerald-200' : 'text-slate-400'}`}>
-                                    PDF Document &bull; WhatsApp
+                                    PDF Document &bull; WhatsApp Attachment
                                   </p>
                                 </div>
                               </div>
-                              <a
-                                href={fullUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 shrink-0 transition-colors ${
-                                  isOutbound
-                                    ? 'bg-white text-emerald-800 hover:bg-emerald-50'
-                                    : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                                }`}
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                                <span>Open</span>
-                              </a>
+                              <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewPdfModal({ url: fullUrl, name: docName })}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer shadow-2xs ${
+                                    isOutbound
+                                      ? 'bg-white text-emerald-800 hover:bg-emerald-50 active:scale-95'
+                                      : 'bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95'
+                                  }`}
+                                  title="View PDF directly in chat"
+                                >
+                                  <ZoomIn className="w-3.5 h-3.5" />
+                                  <span>View PDF</span>
+                                </button>
+                                <a
+                                  href={fullUrl}
+                                  download={docName}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`p-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                                    isOutbound
+                                      ? 'bg-emerald-800/80 hover:bg-emerald-800 text-white'
+                                      : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                                  }`}
+                                  title="Download or open PDF file"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                </a>
+                              </div>
                             </div>
                           );
                         }
 
                         return (
-                          <div className="mb-2.5 overflow-hidden rounded-xl border border-black/10 shadow-xs bg-black/5">
+                          <div className="relative group/img mb-2.5 overflow-hidden rounded-xl border border-black/10 shadow-xs bg-slate-900/5">
                             <img
                               src={fullUrl}
-                              alt="Attachment"
-                              className="w-full max-h-56 object-cover rounded-xl hover:opacity-95 transition-opacity cursor-pointer"
-                              onClick={() => {
-                                window.open(fullUrl, '_blank');
-                              }}
-                              onError={(e) => {
-                                e.target.style.display = 'none';
-                              }}
+                              alt="WhatsApp photo attachment"
+                              className="w-full max-h-64 object-cover rounded-xl transition-all duration-300 group-hover/img:scale-[1.02] cursor-pointer"
+                              onClick={() => setPreviewImageModal({ url: fullUrl, name: msg.sender_name || displayName })}
+                              loading="lazy"
                             />
+                            <div
+                              onClick={() => setPreviewImageModal({ url: fullUrl, name: msg.sender_name || displayName })}
+                              className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-2 cursor-pointer text-white text-xs font-semibold backdrop-blur-2xs"
+                            >
+                              <ZoomIn className="w-4 h-4" />
+                              <span>Click to View Photo</span>
+                            </div>
                           </div>
                         );
                       })()}
@@ -869,6 +909,128 @@ export const ConversationDrawer = ({
 
         </div>
       </div>
+
+      {/* Enlarged Photo Preview Modal */}
+      {previewImageModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setPreviewImageModal(null)}
+        >
+          <div
+            className="relative max-w-3xl max-h-[90vh] w-full bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700 text-white shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <ImageIcon className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="text-xs font-bold truncate">{previewImageModal.name || 'Parent Photo Attachment'}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={previewImageModal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  title="Open in new window"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open</span>
+                </a>
+                <a
+                  href={previewImageModal.url}
+                  download="whatsapp_photo.jpg"
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  title="Download image file"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewImageModal(null)}
+                  className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-3 flex items-center justify-center overflow-auto max-h-[calc(90vh-65px)] bg-black/40">
+              <img
+                src={previewImageModal.url}
+                alt="Parent Photo Preview"
+                className="max-h-[78vh] max-w-full object-contain rounded-lg shadow-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive PDF Preview Modal */}
+      {previewPdfModal && (
+        <div
+          className="fixed inset-0 z-60 bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-fade-in"
+          onClick={() => setPreviewPdfModal(null)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[92vh] w-full bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700 text-white shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-1.5 rounded-lg bg-rose-500/20 text-rose-400">
+                  <FileText className="w-4 h-4 shrink-0" />
+                </div>
+                <div className="min-w-0">
+                  <span className="text-xs font-bold truncate block max-w-xs sm:max-w-md">
+                    {previewPdfModal.name || 'PDF Document'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    PDF Document Viewer
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={previewPdfModal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Open in new window"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Open in Tab</span>
+                </a>
+                <a
+                  href={previewPdfModal.url}
+                  download={previewPdfModal.name || 'document.pdf'}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Download PDF"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewPdfModal(null)}
+                  className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Embedded PDF Viewer */}
+            <div className="w-full h-[76vh] bg-slate-100 flex flex-col">
+              <iframe
+                src={previewPdfModal.url}
+                title={previewPdfModal.name || 'PDF Document Preview'}
+                className="w-full h-full border-0 bg-white"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

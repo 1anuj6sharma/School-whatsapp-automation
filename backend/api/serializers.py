@@ -195,11 +195,35 @@ class TemplateUpdateMetaSerializer(serializers.Serializer):
 
 class MessageLogSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source="student.student_name", read_only=True, default=None)
+    class_name = serializers.SerializerMethodField()
+    section = serializers.SerializerMethodField()
+    class_section = serializers.SerializerMethodField()
     has_response = serializers.BooleanField(read_only=True, default=False)
     response_count = serializers.IntegerField(read_only=True, default=0)
     unread_count = serializers.IntegerField(read_only=True, default=0)
     latest_response_at = serializers.DateTimeField(read_only=True, default=None)
     latest_response_text = serializers.CharField(read_only=True, default=None)
+
+    def get_class_name(self, obj):
+        if obj.student and obj.student.school_class:
+            return obj.student.school_class.name
+        if obj.campaign and obj.campaign.school_class:
+            return obj.campaign.school_class.name
+        return None
+
+    def get_section(self, obj):
+        if obj.student and obj.student.school_class:
+            return obj.student.school_class.section
+        if obj.campaign and obj.campaign.school_class:
+            return obj.campaign.school_class.section
+        return None
+
+    def get_class_section(self, obj):
+        cls_name = self.get_class_name(obj)
+        sec = self.get_section(obj)
+        if cls_name and sec:
+            return f"{cls_name} - {sec}"
+        return cls_name or sec or None
 
     class Meta:
         model = MessageLog
@@ -208,6 +232,9 @@ class MessageLogSerializer(serializers.ModelSerializer):
             "campaign_id",
             "student_id",
             "student_name",
+            "class_name",
+            "section",
+            "class_section",
             "recipient_number",
             "template_name",
             "status",
@@ -312,6 +339,23 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             cls = obj.student.school_class
             return f"{cls.name} - {cls.section}" if cls.section else cls.name
         return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not data.get("media_url") and instance.raw_payload:
+            payload = instance.raw_payload if isinstance(instance.raw_payload, dict) else {}
+            m_type = instance.message_type or payload.get("type", "")
+            media_obj = payload.get(m_type) if isinstance(payload.get(m_type), dict) else {}
+            media_id = (
+                media_obj.get("id")
+                or (payload.get("image", {}).get("id") if isinstance(payload.get("image"), dict) else None)
+                or (payload.get("document", {}).get("id") if isinstance(payload.get("document"), dict) else None)
+                or (payload.get("video", {}).get("id") if isinstance(payload.get("video"), dict) else None)
+                or (payload.get("audio", {}).get("id") if isinstance(payload.get("audio"), dict) else None)
+            )
+            if media_id:
+                data["media_url"] = f"/api/media/whatsapp/{media_id}"
+        return data
 
 
 class SendConversationMessageSerializer(serializers.Serializer):

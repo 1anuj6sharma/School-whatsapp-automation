@@ -68,7 +68,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
   // Import states
   const [importFile, setImportFile] = useState(null);
   const [importClassId, setImportClassId] = useState('');
-  const [resetAbsentFees, setResetAbsentFees] = useState(false);
+  const [feeAbsentAction, setFeeAbsentAction] = useState('keep'); // 'keep' | 'clear_imported_classes' | 'clear_all_school'
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -343,20 +343,21 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
       if (importClassId) {
         formData.append('class_id', importClassId);
       }
-      formData.append('reset_absent_fees', resetAbsentFees ? 'true' : 'false');
+      formData.append('fee_absent_action', feeAbsentAction);
+      formData.append('reset_absent_fees', feeAbsentAction !== 'keep' ? 'true' : 'false');
 
       const result = await api.importStudents(formData);
       if (showToast) {
         showToast({
           type: 'success',
-          title: 'Import Complete!',
-          message: result.message || `Successfully imported ${result.imported_count} students.`,
+          title: 'Import & Fee Sync Complete!',
+          message: result.message || `Successfully processed ${result.imported_count} students.`,
         });
       }
       setShowImportModal(false);
       setImportFile(null);
       setImportClassId('');
-      setResetAbsentFees(false);
+      setFeeAbsentAction('keep');
       fetchData();
     } catch (err) {
       if (showToast) {
@@ -417,6 +418,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
             onClick={() => {
               setImportFile(null);
               setImportClassId('');
+              setFeeAbsentAction('keep');
               setShowImportModal(true);
             }}
             className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold border border-slate-300 shadow-xs transition-all active:scale-95 flex-1 sm:flex-initial cursor-pointer"
@@ -1226,23 +1228,119 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
             </p>
           </div>
 
-          {/* Fee Defaulters Sync Mode Checkbox */}
-          <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-2xl space-y-1.5">
-            <div className="flex items-start gap-2.5">
-              <input
-                type="checkbox"
-                id="reset_absent_fees"
-                checked={resetAbsentFees}
-                onChange={(e) => setResetAbsentFees(e.target.checked)}
-                className="mt-0.5 rounded bg-white border-amber-400 text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
-              />
-              <label htmlFor="reset_absent_fees" className="text-xs font-bold text-amber-950 cursor-pointer select-none">
-                Fee Defaulters Sync Mode (Auto-Clear fees for paid students)
+          {/* Fees Due Synchronization & Absent Student Handling */}
+          <div className="p-4 bg-slate-50 border border-slate-200/90 rounded-2xl space-y-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-black shadow-xs shrink-0">
+                ₹
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-slate-800">
+                  Fees Due Synchronization &amp; Absent Student Handling
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Students listed in the spreadsheet will have their fees updated (e.g. ₹7,000 &rarr; ₹3,000). Choose how to handle students not present in this sheet:
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              {/* Option 1: Keep existing fees */}
+              <label
+                onClick={() => setFeeAbsentAction('keep')}
+                className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                  feeAbsentAction === 'keep'
+                    ? 'bg-white border-emerald-500 ring-2 ring-emerald-500/15 shadow-xs'
+                    : 'bg-white/60 border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="feeAbsentAction"
+                  value="keep"
+                  checked={feeAbsentAction === 'keep'}
+                  onChange={() => setFeeAbsentAction('keep')}
+                  className="mt-0.5 text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                />
+                <div className="space-y-0.5 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900">
+                      Keep Existing Fees for Students Not in Sheet (Partial Update)
+                    </span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                      Default &bull; Safe
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Students not in this sheet will keep their recorded dues intact. Ideal if this spreadsheet is a partial batch or selective student update.
+                  </p>
+                </div>
+              </label>
+
+              {/* Option 2: Clear fees for imported classes */}
+              <label
+                onClick={() => setFeeAbsentAction('clear_imported_classes')}
+                className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                  feeAbsentAction === 'clear_imported_classes'
+                    ? 'bg-amber-50/70 border-amber-500 ring-2 ring-amber-500/15 shadow-xs'
+                    : 'bg-white/60 border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="feeAbsentAction"
+                  value="clear_imported_classes"
+                  checked={feeAbsentAction === 'clear_imported_classes'}
+                  onChange={() => setFeeAbsentAction('clear_imported_classes')}
+                  className="mt-0.5 text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+                />
+                <div className="space-y-0.5 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-950">
+                      Mark Absent Students as Paid (₹0) &mdash; Imported Classes Only
+                    </span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                      Defaulters List
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-amber-900/80 leading-relaxed">
+                    If this sheet contains <strong>only students who currently owe fees</strong>, missing students in the imported classes are assumed to have cleared their dues and will be set to <strong>₹0.00</strong>. Other classes remain untouched.
+                  </p>
+                </div>
+              </label>
+
+              {/* Option 3: Clear fees school-wide */}
+              <label
+                onClick={() => setFeeAbsentAction('clear_all_school')}
+                className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                  feeAbsentAction === 'clear_all_school'
+                    ? 'bg-rose-50/70 border-rose-500 ring-2 ring-rose-500/15 shadow-xs'
+                    : 'bg-white/60 border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="feeAbsentAction"
+                  value="clear_all_school"
+                  checked={feeAbsentAction === 'clear_all_school'}
+                  onChange={() => setFeeAbsentAction('clear_all_school')}
+                  className="mt-0.5 text-rose-600 focus:ring-rose-500 w-4 h-4 cursor-pointer"
+                />
+                <div className="space-y-0.5 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-950">
+                      Auto-Clear Absent Students Across Entire School (₹0)
+                    </span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                      Full School Sync
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-rose-900/80 leading-relaxed">
+                    Use only when uploading a master defaulters list for the whole school. Any student anywhere in the school not found in this sheet will have dues set to <strong>₹0.00</strong>.
+                  </p>
+                </div>
               </label>
             </div>
-            <p className="text-[11px] text-amber-900/80 leading-relaxed pl-6">
-              Enable this if your spreadsheet contains <strong>only students who currently owe fees</strong>. Any existing students in the imported classes who are not in this sheet will have their dues auto-set to <strong>₹0 (Paid)</strong>. Other classes not in the sheet remain untouched.
-            </p>
           </div>
 
           {/* Supported Columns Guide */}

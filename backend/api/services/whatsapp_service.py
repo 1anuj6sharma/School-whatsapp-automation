@@ -153,6 +153,111 @@ class WhatsAppService:
                 logger.error(f"[WhatsAppService] Exception uploading media to Meta: {ex}")
                 return None
 
+    async def get_media_info(self, media_id: str) -> Optional[dict]:
+        """
+        Retrieves media metadata (including temporary download URL) from Meta WhatsApp Cloud API.
+        GET https://graph.facebook.com/v19.0/{media_id}
+        """
+        token = self.get_access_token()
+        if not token or not media_id:
+            logger.warning("[WhatsAppService] Cannot get media info: token or media_id missing.")
+            return None
+
+        clean_id = str(media_id).strip()
+        url = f"https://graph.facebook.com/{self.api_version}/{clean_id}"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+                if res.status_code == 200:
+                    return res.json()
+                logger.error(f"[WhatsAppService] Meta get media info failed ({res.status_code}): {res.text}")
+        except Exception as ex:
+            logger.error(f"[WhatsAppService] Exception getting media info for {clean_id}: {ex}")
+        return None
+
+    async def download_media(self, media_id: str) -> Optional[dict]:
+        """
+        Downloads media bytes from Meta lookaside URL and caches the file to disk.
+        Returns a dict containing file path, relative media_url, and mime_type.
+        """
+        if not media_id:
+            return None
+
+        clean_id = str(media_id).strip()
+        # Check if already cached on disk
+        target_dir = Path(settings.MEDIA_ROOT) / "incoming"
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        for existing_file in target_dir.glob(f"{clean_id}.*"):
+            if existing_file.is_file() and existing_file.stat().st_size > 0:
+                rel_url = f"/uploads/incoming/{existing_file.name}"
+                ext = existing_file.suffix.lower()
+                mime_map = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".webp": "image/webp",
+                    ".pdf": "application/pdf",
+                    ".mp4": "video/mp4",
+                    ".ogg": "audio/ogg",
+                    ".mp3": "audio/mpeg",
+                }
+                return {
+                    "filename": existing_file.name,
+                    "file_path": str(existing_file),
+                    "media_url": rel_url,
+                    "mime_type": mime_map.get(ext, "application/octet-stream"),
+                }
+
+        # Not on disk, query Meta for download URL
+        meta_info = await self.get_media_info(clean_id)
+        if not meta_info or "url" not in meta_info:
+            return None
+
+        dl_url = meta_info["url"]
+        mime_type = meta_info.get("mime_type", "image/jpeg")
+        token = self.get_access_token()
+
+        ext_map = {
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "application/pdf": ".pdf",
+            "video/mp4": ".mp4",
+            "audio/ogg": ".ogg",
+            "audio/mpeg": ".mp3",
+            "audio/amr": ".amr",
+        }
+        ext = ext_map.get(mime_type.lower(), ".jpg")
+        filename = f"{clean_id}{ext}"
+        dest_path = target_dir / filename
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "curl/7.68.0",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.get(dl_url, headers=headers)
+                if res.status_code == 200 and len(res.content) > 0:
+                    with open(dest_path, "wb") as f:
+                        f.write(res.content)
+                    rel_url = f"/uploads/incoming/{filename}"
+                    logger.info(f"[WhatsAppService] Downloaded media {clean_id} successfully ({len(res.content)} bytes) -> {rel_url}")
+                    return {
+                        "filename": filename,
+                        "file_path": str(dest_path),
+                        "media_url": rel_url,
+                        "mime_type": mime_type,
+                        "content": res.content,
+                    }
+                else:
+                    logger.error(f"[WhatsAppService] Failed to download media from lookaside ({res.status_code})")
+        except Exception as ex:
+            logger.error(f"[WhatsAppService] Exception downloading media {clean_id}: {ex}")
+        return None
+
     async def _resolve_image_media_id(self, raw_url: str) -> Optional[str]:
         """
         Resolves an image URL or local path to a Meta media_id by checking local disk locations

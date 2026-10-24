@@ -15,6 +15,10 @@ import {
   Hash,
   Search,
   X,
+  FileSpreadsheet,
+  GraduationCap,
+  Download,
+  Check,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
@@ -25,6 +29,24 @@ import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
 
 const PAGE_SIZE = 10;
+
+export const toLocalDateString = (dateInput) => {
+  if (!dateInput) return '';
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '';
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const getTodayDateString = () => toLocalDateString(new Date());
+
+export const getYesterdayDateString = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return toLocalDateString(d);
+};
 
 export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
   const [logs, setLogs] = useState([]);
@@ -69,6 +91,85 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
   const [toDate, setToDate] = useState('');
   const [beforeDate, setBeforeDate] = useState('');
   const [targetStatus, setTargetStatus] = useState('ALL');
+
+  // Excel Export Modal State
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportScope, setExportScope] = useState('CURRENT'); // 'CURRENT' | 'ALL' | 'SENT' | 'DELIVERED' | 'READ' | 'DELIVERED_READ' | 'RESPONSES' | 'FAILED' | 'SELECTED'
+  const [exportDateMode, setExportDateMode] = useState('ALL'); // 'ALL' | 'SELECTED_DATE' | 'CUSTOM'
+  const [exportCustomDate, setExportCustomDate] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportExcel = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    setIsExporting(true);
+    try {
+      const params = {};
+
+      if (campaignFilter !== 'ALL' && campaignFilter !== '') {
+        params.campaign_id = campaignFilter;
+      }
+
+      // Status Scope
+      if (exportScope === 'CURRENT') {
+        if (statusFilter !== 'ALL') {
+          params.status = statusFilter;
+        }
+      } else if (exportScope === 'SENT') {
+        params.status = 'SENT';
+      } else if (exportScope === 'DELIVERED') {
+        params.status = 'DELIVERED';
+      } else if (exportScope === 'READ') {
+        params.status = 'READ';
+      } else if (exportScope === 'DELIVERED_READ') {
+        params.status = 'DELIVERED_AND_READ';
+      } else if (exportScope === 'RESPONSES') {
+        params.status = 'RESPONSES';
+      } else if (exportScope === 'FAILED') {
+        params.status = 'FAILED';
+      } else if (exportScope === 'SELECTED') {
+        if (selectedIds.length === 0) {
+          showToast?.({
+            type: 'error',
+            title: 'No Logs Selected',
+            message: 'Please select one or more log rows using the checkboxes first.',
+          });
+          setIsExporting(false);
+          return;
+        }
+        params.ids = selectedIds;
+      }
+
+      // Date Scope
+      if (exportDateMode === 'SELECTED_DATE' && responseDateFilter) {
+        params.date = responseDateFilter;
+      } else if (exportDateMode === 'CUSTOM' && exportCustomDate) {
+        params.date = exportCustomDate;
+      } else if (exportScope === 'CURRENT' && responseDateFilter) {
+        params.date = responseDateFilter;
+      }
+
+      if (searchQuery.trim()) {
+        params.search = searchQuery.trim();
+      }
+
+      await api.exportMessageLogs(params);
+      setIsExportModalOpen(false);
+      showToast?.({
+        type: 'success',
+        title: 'Excel Exported',
+        message: 'Message delivery logs exported to Excel (.xlsx) successfully.',
+      });
+    } catch (err) {
+      console.error('Failed to export message logs to Excel', err);
+      showToast?.({
+        type: 'error',
+        title: 'Export Failed',
+        message: err.message || 'Could not export delivery logs to Excel.',
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   // Load campaigns for dropdown filter
   const fetchCampaignsList = async () => {
@@ -165,23 +266,24 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
       }
     }
 
-    // Date-wise filter for response date (if not selected, shows all)
+    // Date-wise filter (exact local date matching)
     if (responseDateFilter) {
       result = result.filter((log) => {
-        if (statusFilter === 'RESPONSES' || log.has_response) {
-          const respDate = log.latest_response_at ? log.latest_response_at.slice(0, 10) : '';
-          return respDate === responseDateFilter;
+        const msgDate = toLocalDateString(log.sent_at || log.created_at);
+        if (statusFilter === 'RESPONSES') {
+          const respDate = toLocalDateString(log.latest_response_at);
+          return respDate === responseDateFilter || msgDate === responseDateFilter;
         }
-        const createdDate = (log.sent_at || log.created_at || '').slice(0, 10);
-        return createdDate === responseDateFilter;
+        return msgDate === responseDateFilter;
       });
     }
 
-    // Search query filter
+    // Search query filter (matches student name, class & section, phone, template, wamid, reply text)
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       result = result.filter((log) => {
         const studentName = (log.student_name || '').toLowerCase();
+        const className = (log.class_section || log.class_name || '').toLowerCase();
         const phone = (log.recipient_number || '').toLowerCase();
         const template = (log.template_name || '').toLowerCase();
         const wamid = (log.whatsapp_message_id || '').toLowerCase();
@@ -190,6 +292,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
         const campId = String(log.campaign_id || '');
         return (
           studentName.includes(q) ||
+          className.includes(q) ||
           phone.includes(q) ||
           template.includes(q) ||
           wamid.includes(q) ||
@@ -397,6 +500,15 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <button
+            onClick={() => setIsExportModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs hover:shadow-sm transition-all cursor-pointer"
+            title="Export delivery audit logs to Excel (.xlsx)"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>Export to Excel</span>
+          </button>
+
           <button
             onClick={() => setIsDateModalOpen(true)}
             className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-600 rounded-xl text-xs font-semibold border border-slate-200 hover:border-rose-300 shadow-xs transition-colors"
@@ -678,8 +790,8 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             </button>
           </div>
 
-          {/* Response Date Filter */}
-          <div className="flex items-center gap-2">
+          {/* Date-wise Filter */}
+          <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700">
               <Calendar className="w-3.5 h-3.5 text-teal-600 shrink-0" />
               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
@@ -692,8 +804,8 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
                   setResponseDateFilter(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="bg-transparent text-xs text-slate-800 outline-none cursor-pointer"
-                title="Filter by response date (leave empty to show all responded logs)"
+                className="bg-transparent text-xs text-slate-800 outline-none cursor-pointer font-medium"
+                title="Select date to show logs of that particular date"
               />
               {responseDateFilter && (
                 <button
@@ -702,16 +814,53 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
                     setResponseDateFilter('');
                     setCurrentPage(1);
                   }}
-                  className="p-0.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-700"
+                  className="p-0.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
                   title="Clear date filter (show all)"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
+
+            {/* Quick Date Shortcuts */}
+            <div className="flex items-center gap-1 text-[11px]">
+              <button
+                type="button"
+                onClick={() => {
+                  setResponseDateFilter(getTodayDateString());
+                  setCurrentPage(1);
+                }}
+                className={`px-2 py-1 rounded-lg border font-semibold transition-colors cursor-pointer ${
+                  responseDateFilter === getTodayDateString()
+                    ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+                title="Filter for today's messages"
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setResponseDateFilter(getYesterdayDateString());
+                  setCurrentPage(1);
+                }}
+                className={`px-2 py-1 rounded-lg border font-semibold transition-colors cursor-pointer ${
+                  responseDateFilter === getYesterdayDateString()
+                    ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+                title="Filter for yesterday's messages"
+              >
+                Yesterday
+              </button>
+            </div>
+
             {responseDateFilter && (
-              <span className="text-[11px] font-medium text-teal-700 bg-teal-50 px-2 py-0.5 rounded-lg border border-teal-200">
-                Filtered: {new Date(responseDateFilter).toLocaleDateString()}
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-teal-800 bg-teal-50 px-2.5 py-1 rounded-xl border border-teal-200">
+                <Check className="w-3 h-3 text-teal-600 shrink-0" />
+                <span>Date: {new Date(responseDateFilter + 'T00:00:00').toLocaleDateString()}</span>
+                <span className="font-bold text-teal-900">({filteredLogs.length} logs)</span>
               </span>
             )}
           </div>
@@ -799,7 +948,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
                   </th>
                   <th className="px-4 py-4">Log ID</th>
                   <th className="px-4 py-4">Campaign ID</th>
-                  <th className="px-4 py-4">Recipient Student</th>
+                  <th className="px-4 py-4">Recipient Student & Class</th>
                   <th className="px-4 py-4">WhatsApp Number</th>
                   <th className="px-4 py-4">Template</th>
                   <th className="px-4 py-4">Status</th>
@@ -860,6 +1009,14 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
                         >
                           {log.student_name || `Student #${log.student_id || '-'}`}
                         </button>
+                        {(log.class_section || log.class_name) && (
+                          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              <GraduationCap className="w-3 h-3 text-indigo-500 shrink-0" />
+                              <span>Class: {log.class_section || log.class_name}</span>
+                            </span>
+                          </div>
+                        )}
                         {log.has_response && (
                           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-50 text-teal-700 border border-teal-200">
@@ -1100,6 +1257,126 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>{isDeleting ? 'Deleting...' : 'Confirm & Delete'}</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Export to Excel Modal */}
+      <Modal
+        isOpen={isExportModalOpen}
+        onClose={() => !isExporting && setIsExportModalOpen(false)}
+        title="Export Delivery Audit Logs to Excel (.xlsx)"
+      >
+        <form onSubmit={handleExportExcel} className="space-y-4">
+          <div className="flex items-center gap-2.5 p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200 text-emerald-950 text-xs shadow-2xs">
+            <FileSpreadsheet className="w-5 h-5 text-emerald-600 shrink-0" />
+            <div>
+              <p className="font-bold text-slate-900">Customized WhatsApp Delivery Logs Export</p>
+              <p className="text-[11px] text-emerald-800 mt-0.5">
+                Every exported sheet includes Student Name, Class & Section, WhatsApp Number, Dispatch & Delivery Timestamps, and parent replies.
+              </p>
+            </div>
+          </div>
+
+          {/* Export Filter Scope */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              Select Status to Export:
+            </label>
+            <select
+              value={exportScope}
+              onChange={(e) => setExportScope(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="CURRENT">Current Filtered View ({filteredLogs.length} logs)</option>
+              <option value="ALL">All Delivery Logs ({counts.total} logs)</option>
+              <option value="SENT">Sent Messages Only ({counts.sent} logs)</option>
+              <option value="DELIVERED">Delivered Messages Only ({counts.delivered} logs)</option>
+              <option value="READ">Read Messages Only ({counts.read} logs)</option>
+              <option value="DELIVERED_READ">Delivered & Read Both ({counts.delivered + counts.read} logs)</option>
+              <option value="RESPONSES">Parent Responses Only ({counts.responses} logs)</option>
+              <option value="FAILED">Undelivered / Failed Errors ({counts.failed} logs)</option>
+              {selectedIds.length > 0 && (
+                <option value="SELECTED">Selected Rows Only ({selectedIds.length} logs selected)</option>
+              )}
+            </select>
+          </div>
+
+          {/* Date Scope */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              Date Filter Scope:
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setExportDateMode('ALL')}
+                className={`px-3 py-2.5 rounded-xl text-xs font-bold border text-left transition-all cursor-pointer ${
+                  exportDateMode === 'ALL'
+                    ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-1 ring-emerald-500/20'
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                All Dates (Full History)
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportDateMode('SELECTED_DATE')}
+                className={`px-3 py-2.5 rounded-xl text-xs font-bold border text-left transition-all cursor-pointer ${
+                  exportDateMode === 'SELECTED_DATE'
+                    ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-1 ring-emerald-500/20'
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                Active Date: {responseDateFilter ? new Date(responseDateFilter + 'T00:00:00').toLocaleDateString() : '(None selected)'}
+              </button>
+            </div>
+            {exportDateMode === 'SELECTED_DATE' && !responseDateFilter && (
+              <p className="text-[11px] text-amber-600 mt-1">
+                Notice: No date filter is currently selected on the table. All dates will be included in the download.
+              </p>
+            )}
+          </div>
+
+          {/* Campaign Scope info */}
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
+            <span className="font-bold text-slate-700">Campaign Scope:</span>
+            {campaignFilter === 'ALL' ? (
+              <span className="font-medium text-slate-600">All Campaigns</span>
+            ) : (
+              <span className="font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                Campaign #{campaignFilter}
+              </span>
+            )}
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              disabled={isExporting}
+              onClick={() => setIsExportModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isExporting}
+              className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm hover:shadow-md transition-all disabled:opacity-50 cursor-pointer"
+            >
+              {isExporting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Generating Excel...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4" />
+                  <span>Download Excel (.xlsx)</span>
+                </>
+              )}
             </button>
           </div>
         </form>

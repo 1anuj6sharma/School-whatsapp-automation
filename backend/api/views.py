@@ -9,9 +9,12 @@ import pandas as pd
 from datetime import datetime, timezone as dt_timezone
 from django.conf import settings
 from django.db.models import Count, Q
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, FileResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -218,7 +221,17 @@ class StudentImportCSVView(APIView):
         file = request.FILES["file"]
         default_class_id = request.data.get("class_id")
         default_class = Class.objects.filter(id=default_class_id).first() if default_class_id else None
-        sync_fees_mode = str(request.data.get("reset_absent_fees", request.data.get("sync_fees_mode", "false"))).lower() in ("true", "1", "yes")
+
+        # fee_absent_action options:
+        # 1. 'keep' (Default / Safe Mode): Students not in this sheet retain their existing fees.
+        # 2. 'clear_imported_classes': Any student in the imported/touched classes who is NOT in this sheet has fees set to ₹0.00 (Paid / Cleared).
+        # 3. 'clear_all_school': Any student in the ENTIRE school who is NOT in this sheet has fees set to ₹0.00 (School-wide defaulter sync).
+        raw_action = request.data.get("fee_absent_action")
+        if raw_action:
+            fee_absent_action = str(raw_action).strip().lower()
+        else:
+            legacy_sync = str(request.data.get("reset_absent_fees", request.data.get("sync_fees_mode", "false"))).lower() in ("true", "1", "yes")
+            fee_absent_action = "clear_imported_classes" if legacy_sync else "keep"
 
         filename = file.name.lower()
         try:
@@ -232,13 +245,48 @@ class StudentImportCSVView(APIView):
         # Normalize column headers
         df.columns = [str(c).strip().lower().replace(" ", "_").replace("-", "_") for c in df.columns]
 
-        # Look for relevant columns
-        name_col = next((c for c in df.columns if "student" in c or "name" in c), None)
-        phone_col = next((c for c in df.columns if "phone" in c or "whatsapp" in c or "mobile" in c or "contact" in c or "number" in c), None)
-        parent_col = next((c for c in df.columns if "parent" in c or "father" in c or "guardian" in c), None)
-        class_col = next((c for c in df.columns if "class" in c or "grade" in c or "standard" in c), None)
-        section_col = next((c for c in df.columns if "section" in c or "sec" in c), None)
-        fees_col = next((c for c in df.columns if any(k in c for k in ["fee", "dues", "amount", "due", "pending", "balance"])), None)
+        # 1. Student Name (exclude parent/guardian/class)
+        name_candidates = [
+            c for c in df.columns
+            if any(k in c for k in ["student", "name", "candidate"])
+            and not any(ex in c for ex in ["parent", "father", "mother", "guardian", "class", "school"])
+        ]
+        if name_candidates:
+            name_candidates.sort(key=lambda c: 0 if ("student" in c or c == "name") else 1)
+            name_col = name_candidates[0]
+        else:
+            name_col = next((c for c in df.columns if "student" in c or "name" in c), None)
+
+        # 2. Phone / WhatsApp (exclude roll, admission, sr, id)
+        phone_candidates = [
+            c for c in df.columns
+            if any(k in c for k in ["phone", "whatsapp", "mobile", "contact", "cell", "number"])
+            and not any(ex in c for ex in ["roll", "admission", "adm", "sr", "serial", "reg", "id", "index"])
+        ]
+        if phone_candidates:
+            phone_candidates.sort(key=lambda c: 0 if any(k in c for k in ["whatsapp", "mobile", "phone"]) else 1)
+            phone_col = phone_candidates[0]
+        else:
+            phone_col = next((c for c in df.columns if any(k in c for k in ["phone", "whatsapp", "mobile", "contact", "number"])), None)
+
+        # 3. Parent / Guardian Name
+        parent_col = next((c for c in df.columns if any(k in c for k in ["parent", "father", "mother", "guardian"])), None)
+
+        # 4. Class & Section
+        class_col = next((c for c in df.columns if any(k in c for k in ["class", "grade", "standard"])), None)
+        section_col = next((c for c in df.columns if any(k in c for k in ["section", "sec"])), None)
+
+        # 5. Fees Due column (prioritize explicit fee/due/balance/pending terms, exclude date/time)
+        fee_candidates = [
+            c for c in df.columns
+            if any(k in c for k in ["fee", "dues", "amount", "due", "pending", "balance", "outstanding", "payable"])
+            and not any(ex in c for ex in ["date", "time", "day", "month", "status", "mode", "receipt"])
+        ]
+        if fee_candidates:
+            fee_candidates.sort(key=lambda c: 0 if ("fee" in c or "due" in c or "pending" in c or "balance" in c) else 1)
+            fees_col = fee_candidates[0]
+        else:
+            fees_col = None
 
         if not name_col or not phone_col:
             return Response(
@@ -248,13 +296,16 @@ class StudentImportCSVView(APIView):
 
         created_count = 0
         updated_count = 0
+        fees_updated_count = 0
         skipped_count = 0
         classes_created = 0
         classes_cache = {}
         touched_class_ids = set()
         imported_student_ids = set()
-
         students_to_create = []
+
+        has_explicit_class_in_sheet = bool(class_col)
+
         for _, row in df.iterrows():
             name_val = str(row.get(name_col, "")).strip()
             phone_val = str(row.get(phone_col, "")).strip()
@@ -269,16 +320,25 @@ class StudentImportCSVView(APIView):
                 skipped_count += 1
                 continue
 
-            # Parse Fees Due if provided in spreadsheet
+            # Parse Fees Due if fee column exists
             fees_val = 0.00
-            if fees_col and str(row.get(fees_col, "")).strip() and str(row.get(fees_col, "")).strip().lower() != "nan":
-                raw_fees = str(row.get(fees_col, "")).replace("₹", "").replace("$", "").replace(",", "").strip()
-                try:
-                    fees_val = float(raw_fees)
-                except ValueError:
-                    fees_val = 0.00
+            fee_is_specified = False
+            if fees_col:
+                raw_cell = str(row.get(fees_col, "")).strip()
+                raw_lower = raw_cell.lower()
+                if raw_cell and raw_lower not in ("nan", "none", "null", ""):
+                    if any(t in raw_lower for t in ["paid", "nil", "clear", "cleared", "no due", "none", "zero"]):
+                        fees_val = 0.00
+                        fee_is_specified = True
+                    else:
+                        clean_str = raw_cell.replace("₹", "").replace("$", "").replace(",", "").strip()
+                        try:
+                            fees_val = max(0.00, float(clean_str))
+                            fee_is_specified = True
+                        except ValueError:
+                            fee_is_specified = False
 
-            # Resolve Class
+            # Resolve Class from sheet if provided
             target_class = None
             if class_col and str(row.get(class_col, "")).strip() and str(row.get(class_col, "")).strip().lower() != "nan":
                 raw_class_name = str(row.get(class_col, "")).strip()
@@ -288,7 +348,10 @@ class StudentImportCSVView(APIView):
                 if cache_key in classes_cache:
                     target_class = classes_cache[cache_key]
                 else:
-                    target_class = Class.objects.filter(name__iexact=raw_class_name).first()
+                    if sec_val:
+                        target_class = Class.objects.filter(name__iexact=raw_class_name, section__iexact=sec_val).first()
+                    if not target_class:
+                        target_class = Class.objects.filter(name__iexact=raw_class_name).first()
                     if not target_class:
                         target_class = Class.objects.create(name=raw_class_name, section=sec_val)
                         classes_created += 1
@@ -297,51 +360,96 @@ class StudentImportCSVView(APIView):
 
             elif default_class:
                 target_class = default_class
-            else:
-                target_class, created_flag = Class.objects.get_or_create(name="General", defaults={"section": "A"})
-                if created_flag:
-                    classes_created += 1
 
-            touched_class_ids.add(target_class.id)
+            # Student matching: Check phone variants across Indian/global number lengths
+            phone_10 = cleaned_phone[-10:] if len(cleaned_phone) >= 10 else cleaned_phone
+            phone_91 = f"91{phone_10}" if len(phone_10) == 10 else cleaned_phone
+            phone_variants = list({cleaned_phone, phone_10, phone_91, f"+{phone_91}"})
 
-            # Check if student already exists (upsert / update detail)
-            existing_student = Student.objects.filter(
-                school_class=target_class,
-                whatsapp_number=cleaned_phone
-            ).first() or Student.objects.filter(
-                whatsapp_number=cleaned_phone,
-                student_name__iexact=name_val
-            ).first()
+            matching_students = list(Student.objects.filter(whatsapp_number__in=phone_variants))
+
+            existing_student = None
+            if matching_students:
+                # 1. Match by class if target_class is specified
+                if target_class:
+                    existing_student = next((s for s in matching_students if s.school_class_id == target_class.id), None)
+
+                # 2. Match by student name
+                if not existing_student and name_val:
+                    norm_name = name_val.strip().lower()
+                    existing_student = next((s for s in matching_students if s.student_name.strip().lower() == norm_name), None)
+                    if not existing_student:
+                        # Partial name match (e.g. "Rahul" vs "Rahul Sharma")
+                        existing_student = next((s for s in matching_students if norm_name in s.student_name.strip().lower() or s.student_name.strip().lower() in norm_name), None)
+
+                # 3. If single student exists in the database with this phone number, match them!
+                if not existing_student and len(matching_students) == 1:
+                    existing_student = matching_students[0]
+
+            # 4. Fallback: match by student name + target_class if target_class known
+            if not existing_student and target_class and name_val:
+                existing_student = Student.objects.filter(
+                    school_class=target_class,
+                    student_name__iexact=name_val.strip()
+                ).first()
 
             if existing_student:
                 imported_student_ids.add(existing_student.id)
+                touched_class_ids.add(existing_student.school_class_id)
                 changed = False
+
                 if existing_student.student_name != name_val:
                     existing_student.student_name = name_val
                     changed = True
+
                 if parent_val and parent_val.lower() != "nan" and existing_student.parent_name != parent_val:
                     existing_student.parent_name = parent_val
                     changed = True
-                if fees_col and float(existing_student.fees_due or 0.0) != float(fees_val):
-                    existing_student.fees_due = fees_val
+
+                if existing_student.whatsapp_number != cleaned_phone:
+                    existing_student.whatsapp_number = cleaned_phone
                     changed = True
-                if existing_student.school_class_id != target_class.id:
-                    existing_student.school_class = target_class
-                    changed = True
+
+                # Fees update logic:
+                if fee_is_specified:
+                    old_fees = float(existing_student.fees_due or 0.0)
+                    new_fees = round(fees_val, 2)
+                    if round(old_fees, 2) != new_fees:
+                        existing_student.fees_due = new_fees
+                        fees_updated_count += 1
+                        changed = True
+
+                # Class update: Only if explicit class provided in sheet or default_class selected
+                if target_class and (has_explicit_class_in_sheet or default_class):
+                    if existing_student.school_class_id != target_class.id:
+                        existing_student.school_class = target_class
+                        changed = True
+                        touched_class_ids.add(target_class.id)
 
                 if changed:
                     existing_student.save()
                     updated_count += 1
                 else:
                     skipped_count += 1
+
             else:
+                # Student does not exist in DB -> create new
+                if not target_class:
+                    if default_class:
+                        target_class = default_class
+                    else:
+                        target_class, created_flag = Class.objects.get_or_create(name="General", defaults={"section": "A"})
+                        if created_flag:
+                            classes_created += 1
+
+                touched_class_ids.add(target_class.id)
                 students_to_create.append(
                     Student(
                         school_class=target_class,
                         student_name=name_val,
                         parent_name=parent_val if parent_val and parent_val.lower() != "nan" else None,
                         whatsapp_number=cleaned_phone,
-                        fees_due=fees_val,
+                        fees_due=fees_val if fee_is_specified else 0.00,
                         whatsapp_opt_in=True,
                     )
                 )
@@ -356,33 +464,48 @@ class StudentImportCSVView(APIView):
             ).values_list("id", flat=True)
             imported_student_ids.update(new_ids)
 
-        # Handle Fee Defaulters Sync Mode: Auto-clear fees to ₹0 for other students in touched classes
+        # Handle Absent Students' Fees according to selected action
         reset_count = 0
-        if sync_fees_mode and fees_col and touched_class_ids:
-            reset_count = Student.objects.filter(
-                school_class_id__in=touched_class_ids
-            ).exclude(
-                id__in=imported_student_ids
-            ).filter(
-                fees_due__gt=0
-            ).update(fees_due=0.00)
-            logger.info(f"[Import] Fee Defaulters Sync: Auto-cleared dues for {reset_count} paid students in touched classes.")
+        if fees_col:
+            if fee_absent_action == "clear_imported_classes" and touched_class_ids:
+                reset_count = Student.objects.filter(
+                    school_class_id__in=touched_class_ids
+                ).exclude(
+                    id__in=imported_student_ids
+                ).filter(
+                    fees_due__gt=0
+                ).update(fees_due=0.00)
+                logger.info(f"[Import] Cleared dues to ₹0 for {reset_count} absent students in touched classes {touched_class_ids}.")
 
-        msg = f"Import complete: {created_count} added, {updated_count} updated."
+            elif fee_absent_action == "clear_all_school":
+                reset_count = Student.objects.exclude(
+                    id__in=imported_student_ids
+                ).filter(
+                    fees_due__gt=0
+                ).update(fees_due=0.00)
+                logger.info(f"[Import] Cleared dues to ₹0 for {reset_count} absent students school-wide.")
+
+        msg_parts = [f"Import complete: {created_count} added, {updated_count} updated."]
+        if fees_updated_count > 0:
+            msg_parts.append(f"{fees_updated_count} student fee dues updated.")
         if reset_count > 0:
-            msg += f" {reset_count} paid students in imported classes auto-cleared to ₹0."
+            msg_parts.append(f"{reset_count} absent students marked as cleared (₹0).")
+        elif fees_col and fee_absent_action == "keep":
+            msg_parts.append("Existing dues retained for students not in sheet.")
         if skipped_count > 0:
-            msg += f" ({skipped_count} unchanged)."
+            msg_parts.append(f"({skipped_count} unchanged).")
         if classes_created > 0:
-            msg += f" Auto-created {classes_created} new class(es)."
+            msg_parts.append(f"Auto-created {classes_created} new class(es).")
 
         return Response({
-            "message": msg,
+            "message": " ".join(msg_parts),
             "imported_count": created_count,
             "updated_count": updated_count,
+            "fees_updated_count": fees_updated_count,
             "reset_count": reset_count,
             "skipped_count": skipped_count,
-            "classes_created_count": classes_created
+            "classes_created_count": classes_created,
+            "fee_absent_action": fee_absent_action,
         })
 
 
@@ -756,6 +879,7 @@ class MessageLogListView(APIView):
         campaign_id = request.query_params.get("campaign_id")
         student_id = request.query_params.get("student_id")
         status_filter = request.query_params.get("status")
+        date_param = request.query_params.get("date")
         from_date = request.query_params.get("from_date")
         to_date = request.query_params.get("to_date")
         before_date = request.query_params.get("before_date")
@@ -763,7 +887,7 @@ class MessageLogListView(APIView):
         limit = int(request.query_params.get("limit", 2000))
         offset = int(request.query_params.get("offset", 0))
 
-        qs = MessageLog.objects.select_related("student").order_by("-created_at")
+        qs = MessageLog.objects.select_related("student__school_class", "campaign__school_class").order_by("-created_at")
 
         if campaign_id and str(campaign_id).strip().upper() not in ("ALL", "", "NONE"):
             qs = qs.filter(campaign_id=campaign_id)
@@ -771,6 +895,16 @@ class MessageLogListView(APIView):
             qs = qs.filter(student_id=student_id)
         if status_filter and str(status_filter).strip().upper() not in ("ALL", "", "NONE", "RESPONSES", "RESPONDED"):
             qs = qs.filter(status__iexact=str(status_filter).strip())
+
+        # Exact date filter (applied to sent_at or created_at)
+        if date_param and str(date_param).strip():
+            parsed_d = parse_date(str(date_param).strip())
+            if parsed_d:
+                if status_filter and str(status_filter).strip().upper() in ("RESPONSES", "RESPONDED"):
+                    pass # Will filter on response/dispatch date below
+                else:
+                    qs = qs.filter(Q(sent_at__date=parsed_d) | (Q(sent_at__isnull=True) & Q(created_at__date=parsed_d)))
+
         if from_date:
             parsed_from = parse_date(str(from_date).strip())
             if parsed_from:
@@ -838,6 +972,15 @@ class MessageLogListView(APIView):
 
         if status_filter and str(status_filter).strip().upper() in ("RESPONSES", "RESPONDED"):
             logs = [l for l in logs if l.has_response]
+            if date_param and str(date_param).strip():
+                parsed_d = parse_date(str(date_param).strip())
+                if parsed_d:
+                    logs = [
+                        l for l in logs
+                        if (l.latest_response_at and l.latest_response_at.date() == parsed_d)
+                        or (l.sent_at and l.sent_at.date() == parsed_d)
+                        or (l.created_at and l.created_at.date() == parsed_d)
+                    ]
 
         if response_date and str(response_date).strip():
             parsed_resp_date = parse_date(str(response_date).strip())
@@ -916,6 +1059,272 @@ class MessageLogBulkDeleteView(APIView):
         count = qs.count()
         qs.delete()
         return Response({"deleted_count": count, "message": f"Successfully deleted {count} message log(s)."}, status=status.HTTP_200_OK)
+
+
+class MessageLogExportView(APIView):
+    """
+    Exports message delivery audit logs to a professionally styled Excel spreadsheet (.xlsx).
+    Supports granular filtering:
+    - Status: ALL, SENT, DELIVERED, READ, DELIVERED_AND_READ, RESPONSES, FAILED
+    - Date: exact date YYYY-MM-DD or date range
+    - Campaign ID: single campaign or all campaigns
+    - Selected log IDs: comma-separated list or array
+    - Search query: matches student, phone, template, or wamid
+    Includes student name, student's class with section, dispatch timestamp,
+    delivered & read timestamps, and parent responses in all cases.
+    """
+    def get(self, request):
+        return self._handle_export(request, request.query_params)
+
+    def post(self, request):
+        params = request.data if isinstance(request.data, dict) else request.query_params
+        return self._handle_export(request, params)
+
+    def _handle_export(self, request, params):
+        campaign_id = params.get("campaign_id")
+        status_filter = str(params.get("status", "ALL")).strip()
+        date_param = params.get("date")
+        from_date = params.get("from_date")
+        to_date = params.get("to_date")
+        search_query = params.get("search", "")
+        ids_param = params.get("ids")
+
+        qs = MessageLog.objects.select_related("student__school_class", "campaign__school_class").order_by("-created_at")
+
+        # Specific IDs (if user selected checkboxes on UI)
+        if ids_param:
+            if isinstance(ids_param, str):
+                id_list = [int(x.strip()) for x in ids_param.split(",") if x.strip().isdigit()]
+            elif isinstance(ids_param, list):
+                id_list = [int(x) for x in ids_param if str(x).isdigit()]
+            else:
+                id_list = []
+            if id_list:
+                qs = qs.filter(id__in=id_list)
+
+        # Campaign filter
+        if campaign_id and str(campaign_id).strip().upper() not in ("ALL", "", "NONE"):
+            qs = qs.filter(campaign_id=campaign_id)
+
+        # Status filter
+        st_upper = status_filter.upper()
+        if st_upper in ("DELIVERED_AND_READ", "DELIVERED_READ", "DELIVERED,READ"):
+            qs = qs.filter(status__in=["DELIVERED", "READ"])
+        elif st_upper not in ("ALL", "", "NONE", "RESPONSES", "RESPONDED"):
+            qs = qs.filter(status__iexact=status_filter)
+
+        # Date filter
+        if date_param and str(date_param).strip():
+            parsed_d = parse_date(str(date_param).strip())
+            if parsed_d:
+                if st_upper not in ("RESPONSES", "RESPONDED"):
+                    qs = qs.filter(Q(sent_at__date=parsed_d) | (Q(sent_at__isnull=True) & Q(created_at__date=parsed_d)))
+
+        if from_date:
+            pf = parse_date(str(from_date).strip())
+            if pf:
+                qs = qs.filter(created_at__date__gte=pf)
+        if to_date:
+            pt = parse_date(str(to_date).strip())
+            if pt:
+                qs = qs.filter(created_at__date__lte=pt)
+
+        # Search query
+        if search_query and str(search_query).strip():
+            sq = str(search_query).strip()
+            qs = qs.filter(
+                Q(student__student_name__icontains=sq) |
+                Q(recipient_number__icontains=sq) |
+                Q(template_name__icontains=sq) |
+                Q(whatsapp_message_id__icontains=sq)
+            )
+
+        logs = list(qs[:5000])
+
+        # Attach parent responses
+        student_ids = {l.student_id for l in logs if l.student_id}
+        phone_tails = set()
+        clean_phones = set()
+        for l in logs:
+            if l.recipient_number:
+                p = sanitize_phone_number(l.recipient_number)
+                clean_phones.add(p)
+                if len(p) >= 10:
+                    phone_tails.add(p[-10:])
+
+        inbound_q = Q()
+        if student_ids:
+            inbound_q |= Q(student_id__in=student_ids)
+        if clean_phones:
+            inbound_q |= Q(phone_number__in=clean_phones)
+        for tail in phone_tails:
+            inbound_q |= Q(phone_number__endswith=tail)
+
+        inbound_by_student = {}
+        inbound_by_phone = {}
+        if inbound_q:
+            inbound_msgs = (
+                ChatMessage.objects.filter(direction="INBOUND")
+                .filter(inbound_q)
+                .order_by("-created_at")
+            )
+            for m in inbound_msgs:
+                if m.student_id:
+                    inbound_by_student.setdefault(m.student_id, []).append(m)
+                if m.phone_number:
+                    cp = sanitize_phone_number(m.phone_number)
+                    inbound_by_phone.setdefault(cp, []).append(m)
+                    if len(cp) >= 10:
+                        inbound_by_phone.setdefault(cp[-10:], []).append(m)
+
+        for l in logs:
+            cp = sanitize_phone_number(l.recipient_number) if l.recipient_number else ""
+            matched = (
+                inbound_by_student.get(l.student_id)
+                or inbound_by_phone.get(cp)
+                or (inbound_by_phone.get(cp[-10:]) if len(cp) >= 10 else None)
+                or []
+            )
+            l.has_response = len(matched) > 0
+            l.response_count = len(matched)
+            l.latest_response_at = matched[0].created_at if matched else None
+            l.latest_response_text = (matched[0].text_content or f"[{matched[0].message_type}]") if matched else None
+
+        if st_upper in ("RESPONSES", "RESPONDED"):
+            logs = [l for l in logs if l.has_response]
+            if date_param and str(date_param).strip():
+                parsed_d = parse_date(str(date_param).strip())
+                if parsed_d:
+                    logs = [
+                        l for l in logs
+                        if (l.latest_response_at and l.latest_response_at.date() == parsed_d)
+                        or (l.sent_at and l.sent_at.date() == parsed_d)
+                        or (l.created_at and l.created_at.date() == parsed_d)
+                    ]
+
+        # Generate styled Excel workbook using openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Delivery Audit Logs"
+
+        headers = [
+            "Log ID",
+            "Campaign ID",
+            "Student Name",
+            "Class & Section",
+            "WhatsApp Number",
+            "Template Name",
+            "Status",
+            "Dispatched Date & Time",
+            "Delivered Date & Time",
+            "Read Date & Time",
+            "Parent Responded",
+            "Replies Count",
+            "Parent Response Message",
+            "Response Date & Time",
+            "WhatsApp Message ID",
+            "Error Message",
+        ]
+        ws.append(headers)
+
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="059669", end_color="059669", fill_type="solid")
+        header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        for col_num in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+        ws.row_dimensions[1].height = 28
+
+        thin_side = Side(border_style="thin", color="E2E8F0")
+        thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        row_align_left = Alignment(vertical="center")
+        row_align_center = Alignment(horizontal="center", vertical="center")
+
+        def format_dt(dt):
+            if not dt:
+                return "-"
+            try:
+                local_dt = timezone.localtime(dt)
+                return local_dt.strftime("%d/%m/%Y %I:%M %p")
+            except Exception:
+                return dt.strftime("%d/%m/%Y %I:%M %p") if hasattr(dt, 'strftime') else str(dt)
+
+        for row_idx, l in enumerate(logs, start=2):
+            cls_name = None
+            sec = None
+            if l.student and l.student.school_class:
+                cls_name = l.student.school_class.name
+                sec = l.student.school_class.section
+            elif l.campaign and l.campaign.school_class:
+                cls_name = l.campaign.school_class.name
+                sec = l.campaign.school_class.section
+
+            if cls_name and sec:
+                class_section = f"{cls_name} - {sec}"
+            else:
+                class_section = cls_name or sec or "-"
+
+            disp_dt = format_dt(l.sent_at or l.created_at)
+            deliv_dt = format_dt(l.delivered_at)
+            read_dt = format_dt(l.read_at)
+            resp_dt = format_dt(l.latest_response_at) if l.has_response else "-"
+            resp_msg = l.latest_response_text if l.has_response else "-"
+
+            row_data = [
+                f"#{l.id}",
+                f"#{l.campaign_id}" if l.campaign_id else "Direct",
+                l.student.student_name if l.student else f"Student #{l.student_id or '-'}",
+                class_section,
+                l.recipient_number,
+                l.template_name,
+                l.status,
+                disp_dt,
+                deliv_dt,
+                read_dt,
+                "YES" if l.has_response else "NO",
+                l.response_count if l.has_response else 0,
+                resp_msg,
+                resp_dt,
+                l.whatsapp_message_id or "-",
+                l.error_message or "-",
+            ]
+            ws.append(row_data)
+
+            for col_num in range(1, len(row_data) + 1):
+                c = ws.cell(row=row_idx, column=col_num)
+                c.border = thin_border
+                c.font = Font(name="Calibri", size=10)
+                if col_num in (1, 2, 7, 11, 12):
+                    c.alignment = row_align_center
+                elif col_num in (8, 9, 10, 14):
+                    c.alignment = row_align_center
+                else:
+                    c.alignment = row_align_left
+
+            ws.row_dimensions[row_idx].height = 22
+
+        # Auto-fit column widths
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val = str(cell.value or "")
+                if len(val) > max_len:
+                    max_len = len(val)
+            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 42)
+
+        response = HttpResponse(
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        safe_date = str(date_param).replace("-", "") if date_param else "All_Dates"
+        safe_status = st_upper.replace(" ", "_").replace(",", "_")
+        filename = f"Message_Logs_{safe_status}_{safe_date}.xlsx"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        return response
 
 
 
@@ -1131,14 +1540,26 @@ class WhatsAppWebhookView(APIView):
                         elif msg_type == "image":
                             caption = msg_item.get("image", {}).get("caption", "")
                             extracted_text = f"📷 Photo: {caption}" if caption else "📷 Photo"
+                            img_id = msg_item.get("image", {}).get("id")
+                            if img_id:
+                                media_url = f"/api/media/whatsapp/{img_id}"
                         elif msg_type == "document":
                             filename = msg_item.get("document", {}).get("filename", "")
                             extracted_text = f"📄 Document: {filename}" if filename else "📄 Document"
+                            doc_id = msg_item.get("document", {}).get("id")
+                            if doc_id:
+                                media_url = f"/api/media/whatsapp/{doc_id}"
                         elif msg_type in ("audio", "voice"):
                             extracted_text = "🎵 Voice Note / Audio"
+                            aud_id = msg_item.get(msg_type, {}).get("id") or msg_item.get("audio", {}).get("id") or msg_item.get("voice", {}).get("id")
+                            if aud_id:
+                                media_url = f"/api/media/whatsapp/{aud_id}"
                         elif msg_type == "video":
                             caption = msg_item.get("video", {}).get("caption", "")
                             extracted_text = f"🎥 Video: {caption}" if caption else "🎥 Video"
+                            vid_id = msg_item.get("video", {}).get("id")
+                            if vid_id:
+                                media_url = f"/api/media/whatsapp/{vid_id}"
                         elif msg_type == "location":
                             loc = msg_item.get("location", {})
                             loc_name = loc.get("name") or loc.get("address") or f"{loc.get('latitude')}, {loc.get('longitude')}"
@@ -1353,7 +1774,7 @@ class ConversationDetailView(APIView):
                 )
                 chat_messages.append(new_chat_msg)
 
-        # Attach image media_url if message template has an image header
+        # Attach image media_url if message template has an image header or if incoming message has media
         for m in chat_messages:
             if not m.media_url and m.template_name:
                 tpl = MessageTemplate.objects.filter(name=m.template_name).first()
@@ -1361,6 +1782,23 @@ class ConversationDetailView(APIView):
                     m.media_url = tpl.sample_image_url
             if not m.media_url and m.message_log and m.message_log.campaign and m.message_log.campaign.header_image_url:
                 m.media_url = m.message_log.campaign.header_image_url
+            if not m.media_url and m.raw_payload:
+                payload = m.raw_payload if isinstance(m.raw_payload, dict) else {}
+                m_type = m.message_type or payload.get("type", "")
+                media_obj = payload.get(m_type) if isinstance(payload.get(m_type), dict) else {}
+                media_id = (
+                    media_obj.get("id")
+                    or (payload.get("image", {}).get("id") if isinstance(payload.get("image"), dict) else None)
+                    or (payload.get("document", {}).get("id") if isinstance(payload.get("document"), dict) else None)
+                    or (payload.get("video", {}).get("id") if isinstance(payload.get("video"), dict) else None)
+                    or (payload.get("audio", {}).get("id") if isinstance(payload.get("audio"), dict) else None)
+                )
+                if media_id:
+                    m.media_url = f"/api/media/whatsapp/{media_id}"
+                    try:
+                        ChatMessage.objects.filter(id=m.id).update(media_url=m.media_url)
+                    except Exception:
+                        pass
 
         chat_messages.sort(key=lambda m: m.created_at)
 
@@ -1625,6 +2063,58 @@ class MediaUploadView(APIView):
                 "relative_url": relative_url,
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+class WhatsAppMediaProxyView(APIView):
+    """
+    Retrieves and serves WhatsApp incoming media attachments (images, photos, documents, videos).
+    If the file has already been downloaded to disk, serves directly via FileResponse.
+    Otherwise, contacts Meta's Graph API, downloads the file using the secure bot Bearer token,
+    caches to settings.MEDIA_ROOT / 'incoming', and streams it to the client.
+    """
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request, media_id):
+        clean_id = str(media_id).strip()
+        if not clean_id:
+            return Response({"detail": "Media ID required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        target_dir = Path(settings.MEDIA_ROOT) / "incoming"
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Check existing cached files on disk
+        for existing in target_dir.glob(f"{clean_id}.*"):
+            if existing.is_file() and existing.stat().st_size > 0:
+                ext = existing.suffix.lower()
+                mime_map = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".webp": "image/webp",
+                    ".pdf": "application/pdf",
+                    ".mp4": "video/mp4",
+                    ".ogg": "audio/ogg",
+                    ".mp3": "audio/mpeg",
+                }
+                mime = mime_map.get(ext, "application/octet-stream")
+                return FileResponse(open(existing, "rb"), content_type=mime)
+
+        # 2. Download from Meta
+        try:
+            dl_res = async_to_sync(whatsapp_service.download_media)(clean_id)
+            if dl_res and dl_res.get("file_path"):
+                fp = dl_res["file_path"]
+                mime = dl_res.get("mime_type", "image/jpeg")
+                if os.path.isfile(fp):
+                    return FileResponse(open(fp, "rb"), content_type=mime)
+        except Exception as exc:
+            logger.error(f"[WhatsAppMediaProxyView] Failed to download media {clean_id}: {exc}")
+
+        return Response(
+            {"detail": "Photo attachment not found or expired on WhatsApp servers."},
+            status=status.HTTP_404_NOT_FOUND
         )
 
 

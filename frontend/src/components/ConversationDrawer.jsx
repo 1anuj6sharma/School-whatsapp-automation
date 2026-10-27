@@ -67,6 +67,24 @@ export const ConversationDrawer = ({
 
   const identifier = studentId || phoneNumber;
 
+  const markActiveMessagesAsRead = () => {
+    if (identifier) {
+      api.markConversationRead(identifier);
+    }
+    setConversation((prev) => {
+      if (!prev || !prev.messages) return prev;
+      let hasUnread = false;
+      const updatedMessages = prev.messages.map((m) => {
+        if (m.direction === 'INBOUND' && (m.status === 'RECEIVED' || m.status === 'UNREAD')) {
+          hasUnread = true;
+          return { ...m, status: 'READ' };
+        }
+        return m;
+      });
+      return hasUnread ? { ...prev, messages: updatedMessages } : prev;
+    });
+  };
+
   const scrollToBottom = (behavior = 'smooth') => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior });
@@ -76,6 +94,7 @@ export const ConversationDrawer = ({
     setIsAtBottom(true);
     isAtBottomRef.current = true;
     setUnreadCount(0);
+    markActiveMessagesAsRead();
   };
 
   const handleScroll = () => {
@@ -88,6 +107,7 @@ export const ConversationDrawer = ({
     setIsAtBottom(atBottom);
     if (atBottom) {
       setUnreadCount(0);
+      markActiveMessagesAsRead();
     }
   };
 
@@ -735,13 +755,13 @@ export const ConversationDrawer = ({
               <button
                 type="button"
                 onClick={() => scrollToBottom('smooth')}
-                className="absolute bottom-4 right-4 z-20 w-10 h-10 rounded-full bg-white shadow-lg border border-slate-200/90 flex items-center justify-center text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/60 hover:border-emerald-300 transition-all transform hover:scale-105 active:scale-95 group focus:outline-none cursor-pointer"
+                className="absolute bottom-4 right-4 z-20 w-10 h-10 rounded-full bg-slate-800/95 hover:bg-slate-900 text-white shadow-xl border border-slate-700/90 flex items-center justify-center transition-all duration-200 transform hover:scale-105 active:scale-95 group focus:outline-none cursor-pointer"
                 title="Scroll to latest message"
                 aria-label="Scroll to bottom"
               >
-                <ChevronDown className="w-5 h-5 group-hover:translate-y-0.5 transition-transform" />
+                <ChevronDown className="w-5 h-5 text-slate-200 group-hover:translate-y-0.5 transition-transform" />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center shadow-md animate-bounce">
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center shadow-md animate-pulse">
                     {unreadCount > 99 ? '99+' : unreadCount}
                   </span>
                 )}

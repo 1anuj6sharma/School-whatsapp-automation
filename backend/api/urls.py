@@ -20,6 +20,7 @@ from .views import (
     WhatsAppWebhookView,
     ConversationListView,
     ConversationDetailView,
+    ConversationMarkReadView,
     ConversationSendMessageView,
     EmbeddedSignupConfigView,
     EmbeddedSignupExchangeTokenView,
@@ -94,6 +95,8 @@ urlpatterns = [
     # Conversations API
     path("api/conversations/send-message", ConversationSendMessageView.as_view(), name="conversation-send"),
     path("api/conversations/send-message/", ConversationSendMessageView.as_view(), name="conversation-send-slash"),
+    path("api/conversations/<str:identifier>/read", ConversationMarkReadView.as_view(), name="conversation-mark-read"),
+    path("api/conversations/<str:identifier>/read/", ConversationMarkReadView.as_view(), name="conversation-mark-read-slash"),
     path("api/conversations/<str:identifier>", ConversationDetailView.as_view(), name="conversation-detail"),
     path("api/conversations/<str:identifier>/", ConversationDetailView.as_view(), name="conversation-detail-slash"),
     path("api/conversations", ConversationListView.as_view(), name="conversation-list"),

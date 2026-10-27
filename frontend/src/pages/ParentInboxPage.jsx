@@ -57,6 +57,9 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
 
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [newMessagesBelow, setNewMessagesBelow] = useState(0);
+  const prevMessagesCountRef = useRef(0);
 
   // Load classes for filter dropdown
   useEffect(() => {
@@ -166,18 +169,88 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
     }
   }, [activePhone, activeStudentId, fetchActiveChat]);
 
-  // Auto scroll chat to bottom
-  useEffect(() => {
-    if (messagesEndRef.current && !loadingChat) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  // Mark all unread inbound messages as READ when seen in current context
+  const markActiveMessagesAsRead = useCallback(() => {
+    const identifier = activeStudentId || activePhone;
+    if (!identifier) return;
+
+    // Update messages in conversationData immediately
+    setConversationData((prev) => {
+      if (!prev || !prev.messages) return prev;
+      let hasUnread = false;
+      const updatedMessages = prev.messages.map((m) => {
+        if (m.direction === 'INBOUND' && (m.status === 'RECEIVED' || m.status === 'UNREAD')) {
+          hasUnread = true;
+          return { ...m, status: 'READ' };
+        }
+        return m;
+      });
+      return hasUnread ? { ...prev, messages: updatedMessages } : prev;
+    });
+
+    // Update conversation item unread_count in the list
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.phone_number === activePhone || (activeStudentId && c.student_id === activeStudentId)) {
+          return { ...c, unread_count: 0 };
+        }
+        return c;
+      })
+    );
+
+    // Call backend mark read endpoint
+    api.markConversationRead(identifier);
+  }, [activePhone, activeStudentId]);
+
+  // Scroll to bottom helper
+  const scrollToBottom = useCallback((behavior = 'smooth') => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior });
+    } else if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
-  }, [conversationData?.messages, loadingChat]);
+    setIsAtBottom(true);
+    setNewMessagesBelow(0);
+    markActiveMessagesAsRead();
+  }, [markActiveMessagesAsRead]);
+
+  // Scroll event handler for chat thread
+  const handleScroll = useCallback(() => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distanceToBottom < 80;
+    setIsAtBottom(atBottom);
+    if (atBottom) {
+      setNewMessagesBelow(0);
+      markActiveMessagesAsRead();
+    }
+  }, [markActiveMessagesAsRead]);
+
+  // Auto scroll chat to bottom when messages update or user is already at bottom
+  useEffect(() => {
+    const msgs = conversationData?.messages || [];
+    if (msgs.length > 0 && !loadingChat) {
+      const prevCount = prevMessagesCountRef.current;
+      const currentCount = msgs.length;
+      prevMessagesCountRef.current = currentCount;
+
+      if (isAtBottom) {
+        scrollToBottom('smooth');
+      } else if (currentCount > prevCount) {
+        setNewMessagesBelow((prev) => prev + (currentCount - prevCount));
+      }
+    }
+  }, [conversationData?.messages, loadingChat, isAtBottom, scrollToBottom]);
 
   // Handle Select Conversation
   const handleSelectConversation = (conv) => {
     setActivePhone(conv.phone_number);
     setActiveStudentId(conv.student_id);
     setMobileView('CHAT');
+    setIsAtBottom(true);
+    setNewMessagesBelow(0);
+    prevMessagesCountRef.current = 0;
   };
 
   // Send Direct Message
@@ -618,101 +691,122 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
               </div>
 
               {/* Chat Messages Thread */}
-              <div
-                ref={chatContainerRef}
-                className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5"
-                style={{
-                  backgroundImage: `radial-gradient(#cbd5e1 0.75px, transparent 0.75px)`,
-                  backgroundSize: '16px 16px',
-                }}
-              >
-                {loadingChat ? (
-                  <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
-                    <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
-                    <p className="text-xs font-medium">Loading full message history...</p>
-                  </div>
-                ) : activeMessages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
-                    <MessageCircle className="w-10 h-10 text-slate-300" />
-                    <p className="text-xs font-semibold text-slate-600">No message records yet</p>
-                    <p className="text-[11px] text-slate-400">Send an individual notice or quick message below.</p>
-                  </div>
-                ) : (
-                  activeMessages.map((msg, index) => {
-                    const isOutbound = msg.direction === 'OUTBOUND';
+              <div className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
+                <div
+                  ref={chatContainerRef}
+                  onScroll={handleScroll}
+                  className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5"
+                  style={{
+                    backgroundImage: `radial-gradient(#cbd5e1 0.75px, transparent 0.75px)`,
+                    backgroundSize: '16px 16px',
+                  }}
+                >
+                  {loadingChat ? (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
+                      <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                      <p className="text-xs font-medium">Loading full message history...</p>
+                    </div>
+                  ) : activeMessages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
+                      <MessageCircle className="w-10 h-10 text-slate-300" />
+                      <p className="text-xs font-semibold text-slate-600">No message records yet</p>
+                      <p className="text-[11px] text-slate-400">Send an individual notice or quick message below.</p>
+                    </div>
+                  ) : (
+                    activeMessages.map((msg, index) => {
+                      const isOutbound = msg.direction === 'OUTBOUND';
 
-                    return (
-                      <div
-                        key={msg.id || index}
-                        className={`flex flex-col ${isOutbound ? 'items-end' : 'items-start'}`}
-                      >
-                        {/* Bubble Container */}
+                      return (
                         <div
-                          className={`max-w-[85%] sm:max-w-md md:max-w-lg rounded-2xl p-3 shadow-xs text-xs relative ${
-                            isOutbound
-                              ? 'bg-emerald-100/90 text-emerald-950 border border-emerald-200/80 rounded-tr-xs'
-                              : 'bg-white text-slate-900 border border-slate-200/90 rounded-tl-xs'
-                          }`}
+                          key={msg.id || index}
+                          className={`flex flex-col ${isOutbound ? 'items-end' : 'items-start'}`}
                         >
-                          {/* Sender label */}
-                          {!isOutbound && (
-                            <div className="font-bold text-[11px] text-emerald-700 mb-1 flex items-center gap-1">
-                              <User className="w-3 h-3" />
-                              <span>{msg.sender_name || activeStudent?.parent_name || 'Parent'}</span>
-                            </div>
-                          )}
-
-                          {/* Template Badge if broadcast */}
-                          {msg.template_name && (
-                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-200/70 text-emerald-900 text-[10px] font-bold mb-1.5 uppercase tracking-wider">
-                              <FileCode className="w-3 h-3" />
-                              <span>Template: {msg.template_name}</span>
-                            </div>
-                          )}
-
-                          {/* Media Header (if attached) */}
-                          {msg.media_url && (
-                            <div className="mb-2 rounded-xl overflow-hidden border border-slate-200/80 bg-black/5">
-                              {msg.media_url.endsWith('.pdf') ? (
-                                <a
-                                  href={msg.media_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="p-3 flex items-center gap-2 text-xs font-semibold text-emerald-700 hover:underline"
-                                >
-                                  <span>View Attached PDF Document</span>
-                                  <ExternalLink className="w-3.5 h-3.5" />
-                                </a>
-                              ) : (
-                                <img
-                                  src={msg.media_url}
-                                  alt="WhatsApp attachment"
-                                  className="w-full max-h-48 object-cover rounded-lg"
-                                />
-                              )}
-                            </div>
-                          )}
-
-                          {/* Message Body */}
-                          <p className="whitespace-pre-wrap leading-relaxed text-xs sm:text-[13px]">
-                            {msg.text_content}
-                          </p>
-
-                          {/* Message Metadata (Timestamp & Delivery Receipts) */}
+                          {/* Bubble Container */}
                           <div
-                            className={`flex items-center justify-end gap-1 text-[10px] mt-1 font-medium ${
-                              isOutbound ? 'text-emerald-800/80' : 'text-slate-400'
+                            className={`max-w-[85%] sm:max-w-md md:max-w-lg rounded-2xl p-3 shadow-xs text-xs relative ${
+                              isOutbound
+                                ? 'bg-emerald-100/90 text-emerald-950 border border-emerald-200/80 rounded-tr-xs'
+                                : 'bg-white text-slate-900 border border-slate-200/90 rounded-tl-xs'
                             }`}
                           >
-                            <span>{formatFullTime(msg.created_at)}</span>
-                            {isOutbound && renderDeliveryTick(msg.status)}
+                            {/* Sender label */}
+                            {!isOutbound && (
+                              <div className="font-bold text-[11px] text-emerald-700 mb-1 flex items-center gap-1">
+                                <User className="w-3 h-3" />
+                                <span>{msg.sender_name || activeStudent?.parent_name || 'Parent'}</span>
+                              </div>
+                            )}
+
+                            {/* Template Badge if broadcast */}
+                            {msg.template_name && (
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-200/70 text-emerald-900 text-[10px] font-bold mb-1.5 uppercase tracking-wider">
+                                <FileCode className="w-3 h-3" />
+                                <span>Template: {msg.template_name}</span>
+                              </div>
+                            )}
+
+                            {/* Media Header (if attached) */}
+                            {msg.media_url && (
+                              <div className="mb-2 rounded-xl overflow-hidden border border-slate-200/80 bg-black/5">
+                                {msg.media_url.endsWith('.pdf') ? (
+                                  <a
+                                    href={msg.media_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="p-3 flex items-center gap-2 text-xs font-semibold text-emerald-700 hover:underline"
+                                  >
+                                    <span>View Attached PDF Document</span>
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                  </a>
+                                ) : (
+                                  <img
+                                    src={msg.media_url}
+                                    alt="WhatsApp attachment"
+                                    className="w-full max-h-48 object-cover rounded-lg"
+                                  />
+                                )}
+                              </div>
+                            )}
+
+                            {/* Message Body */}
+                            <p className="whitespace-pre-wrap leading-relaxed text-xs sm:text-[13px]">
+                              {msg.text_content}
+                            </p>
+
+                            {/* Message Metadata (Timestamp & Delivery Receipts) */}
+                            <div
+                              className={`flex items-center justify-end gap-1 text-[10px] mt-1 font-medium ${
+                                isOutbound ? 'text-emerald-800/80' : 'text-slate-400'
+                              }`}
+                            >
+                              <span>{formatFullTime(msg.created_at)}</span>
+                              {isOutbound && renderDeliveryTick(msg.status)}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })
+                      );
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+
+                {/* WhatsApp-style Floating Scroll to Bottom Arrow Button */}
+                {!isAtBottom && (
+                  <button
+                    type="button"
+                    onClick={() => scrollToBottom('smooth')}
+                    className="absolute bottom-4 right-4 z-20 w-10 h-10 rounded-full bg-slate-800/95 hover:bg-slate-900 text-white shadow-xl border border-slate-700/90 flex items-center justify-center transition-all duration-200 transform hover:scale-105 active:scale-95 group focus:outline-none cursor-pointer"
+                    title="Scroll to latest message"
+                    aria-label="Scroll to bottom"
+                  >
+                    <ChevronDown className="w-5 h-5 text-slate-200 group-hover:translate-y-0.5 transition-transform" />
+                    {newMessagesBelow > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center shadow-md animate-pulse">
+                        {newMessagesBelow > 99 ? '99+' : newMessagesBelow}
+                      </span>
+                    )}
+                  </button>
                 )}
-                <div ref={messagesEndRef} />
               </div>
 
               {/* Chat Input Bar */}

@@ -2244,6 +2244,38 @@ class ConversationDetailView(APIView):
         })
 
 
+class ConversationMarkReadView(APIView):
+    def post(self, request, identifier=None):
+        phone = identifier
+        student_id = None
+        if identifier and str(identifier).isdigit() and len(str(identifier)) <= 8:
+            student_id = identifier
+            phone = None
+
+        student = None
+        if student_id:
+            student = Student.objects.filter(id=student_id).first()
+            if student:
+                phone = student.whatsapp_number
+
+        filter_q = Q()
+        if student:
+            filter_q |= Q(student=student)
+        if phone:
+            clean_p = sanitize_phone_number(phone)
+            filter_q |= Q(phone_number=clean_p)
+            if len(clean_p) >= 10:
+                filter_q |= Q(phone_number__endswith=clean_p[-10:])
+
+        updated_cnt = ChatMessage.objects.filter(
+            filter_q, direction="INBOUND", status__in=["RECEIVED", "UNREAD"]
+        ).update(status="READ")
+
+        invalidate_conversation_cache()
+
+        return Response({"status": "success", "marked_read": updated_cnt})
+
+
 class ConversationSendMessageView(APIView):
     def post(self, request):
         serializer = SendConversationMessageSerializer(data=request.data)

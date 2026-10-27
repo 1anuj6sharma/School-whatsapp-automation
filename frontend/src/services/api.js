@@ -426,6 +426,18 @@ export const api = {
     return handleResponse(res);
   },
 
+  async markConversationRead(phoneOrStudentId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(phoneOrStudentId)}/read`, {
+        method: 'POST',
+      });
+      return handleResponse(res);
+    } catch (e) {
+      console.warn('markConversationRead failed:', e);
+      return null;
+    }
+  },
+
   async sendConversationMessage(data) {
     const res = await fetch(`${API_BASE}/api/conversations/send-message`, {
       method: 'POST',

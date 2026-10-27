@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   GraduationCap,
   Plus,
@@ -28,6 +28,7 @@ export const ClassesPage = ({
   const [activeClassId, setActiveClassId] = useState(null);
   const [classStudents, setClassStudents] = useState([]);
   const [loadingClassStudents, setLoadingClassStudents] = useState(false);
+  const studentsCacheRef = useRef({});
 
   // Modals for Group/Class
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -52,10 +53,10 @@ export const ClassesPage = ({
   const [studentOptIn, setStudentOptIn] = useState(true);
   const [isAddingStudent, setIsAddingStudent] = useState(false);
 
-  const fetchClasses = async () => {
-    setLoading(true);
+  const fetchClasses = async (forceRefresh = false) => {
+    if (classes.length === 0) setLoading(true);
     try {
-      const data = await api.getClasses();
+      const data = await api.getClasses(forceRefresh);
       setClasses(data);
       if (data.length > 0 && !activeClassId) {
         setActiveClassId(data[0].id);
@@ -75,14 +76,19 @@ export const ClassesPage = ({
     fetchClasses();
   }, []);
 
-  const fetchStudents = async () => {
+  const fetchStudents = async (forceRefresh = false) => {
     if (!activeClassId) {
       setClassStudents([]);
+      return;
+    }
+    if (!forceRefresh && studentsCacheRef.current[activeClassId]) {
+      setClassStudents(studentsCacheRef.current[activeClassId]);
       return;
     }
     setLoadingClassStudents(true);
     try {
       const students = await api.getStudents({ class_id: activeClassId });
+      studentsCacheRef.current[activeClassId] = students;
       setClassStudents(students);
     } catch (err) {
       console.error('Error fetching group students', err);
@@ -187,9 +193,9 @@ export const ClassesPage = ({
       setStudentName('');
       setStudentParent('');
       setStudentPhone('');
-      setStudentOptIn(true);
-      fetchStudents();
-      fetchClasses();
+      studentsCacheRef.current = {};
+      fetchStudents(true);
+      fetchClasses(true);
     } catch (err) {
       showToast({
         type: 'error',

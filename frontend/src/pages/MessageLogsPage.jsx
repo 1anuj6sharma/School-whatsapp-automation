@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   ScrollText,
   RefreshCw,
@@ -19,6 +19,7 @@ import {
   GraduationCap,
   Download,
   Check,
+  Loader2,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
@@ -60,6 +61,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
   const [responseDateFilter, setResponseDateFilter] = useState('');
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadingPage, setLoadingPage] = useState(1);
 
   const [activeConversation, setActiveConversation] = useState(null);
 
@@ -171,6 +173,20 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
     }
   };
 
+  const [totalLogs, setTotalLogs] = useState(0);
+  const pageCacheRef = useRef({});
+  const [serverCounts, setServerCounts] = useState({
+    total: 0,
+    sent: 0,
+    delivered: 0,
+    read: 0,
+    failed: 0,
+    queued: 0,
+    responses: 0,
+    unread_responses: 0,
+    unread_chats: 0,
+  });
+
   // Load campaigns for dropdown filter
   const fetchCampaignsList = async () => {
     try {
@@ -181,20 +197,57 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
     }
   };
 
-  // Fetch Message Logs from API for the selected campaign
-  const fetchLogs = async () => {
+  // Fetch Message Logs from API for the selected page & filters with in-memory caching
+  const fetchLogsPage = async (pageNumber = 1, force = false) => {
+    // Check in-memory page cache first
+    if (!force && pageCacheRef.current[pageNumber]) {
+      const cached = pageCacheRef.current[pageNumber];
+      setLogs(cached.results);
+      setTotalLogs(cached.count);
+      if (cached.counts) setServerCounts(cached.counts);
+      setCurrentPage(pageNumber);
+      setLoadingPage(pageNumber);
+      return;
+    }
+
+    setLoadingPage(pageNumber);
+    setCurrentPage(pageNumber);
     setLoading(true);
     try {
       const params = {
-        limit: 2000,
+        page: pageNumber,
+        page_size: PAGE_SIZE,
       };
       if (campaignFilter !== 'ALL' && campaignFilter !== '') {
         params.campaign_id = campaignFilter;
       }
+      if (statusFilter !== 'ALL') {
+        params.status = statusFilter;
+      }
+      if (showUnreadOnly) {
+        params.unread_only = true;
+      }
+      if (responseDateFilter) {
+        params.date = responseDateFilter;
+      }
+      if (searchQuery.trim()) {
+        params.search = searchQuery.trim();
+      }
 
-      const data = await api.getMessageLogs(params);
-      setLogs(data || []);
-      setCurrentPage(1);
+      const res = await api.getMessageLogs(params);
+      const results = Array.isArray(res) ? res : (res?.results || []);
+      const count = typeof res?.count === 'number' ? res.count : results.length;
+      const countsData = res?.counts || null;
+
+      // Cache this page
+      pageCacheRef.current[pageNumber] = { results, count, counts: countsData };
+
+      setLogs(results);
+      setTotalLogs(count);
+      if (countsData) {
+        setServerCounts(countsData);
+      }
+      setCurrentPage(pageNumber);
     } catch (err) {
       console.error('Failed to load message logs', err);
       showToast?.({
@@ -207,110 +260,35 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
     }
   };
 
+  const fetchLogs = (force = true) => {
+    pageCacheRef.current = {};
+    fetchLogsPage(currentPage, true);
+  };
+
   useEffect(() => {
     fetchCampaignsList();
   }, []);
 
+  // Filter effect: when campaign, status, date, or unread toggle changes, clear cache and load page 1
   useEffect(() => {
-    fetchLogs();
-  }, [campaignFilter]);
+    pageCacheRef.current = {};
+    fetchLogsPage(1, true);
+  }, [campaignFilter, statusFilter, responseDateFilter, showUnreadOnly]);
 
-  // Dynamic counts according to current campaign filter (Sent, Delivered, Read, Failed, Queued, Responses)
-  const counts = useMemo(() => {
-    const total = logs.length;
-    let sent = 0;
-    let delivered = 0;
-    let read = 0;
-    let failed = 0;
-    let queued = 0;
-    let responses = 0;
-    let unread_responses = 0;
-    let unread_chats = 0;
+  // Debounced search query effect
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      pageCacheRef.current = {};
+      fetchLogsPage(1, true);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
 
-    logs.forEach((log) => {
-      const st = (log.status || '').toUpperCase();
-      if (st === 'SENT') sent++;
-      else if (st === 'DELIVERED') delivered++;
-      else if (st === 'READ') read++;
-      else if (st === 'FAILED') failed++;
-      else if (st === 'QUEUED') queued++;
+  const counts = serverCounts;
 
-      if (log.has_response) {
-        responses++;
-        if (log.unread_count > 0) {
-          unread_responses += log.unread_count;
-          unread_chats++;
-        }
-      }
-    });
-
-    return { total, sent, delivered, read, failed, queued, responses, unread_responses, unread_chats };
-  }, [logs]);
-
-  // Filter logs by statusFilter, responseDateFilter, showUnreadOnly AND search query
-  const filteredLogs = useMemo(() => {
-    let result = logs;
-
-    // Show unread only toggle
-    if (showUnreadOnly) {
-      result = result.filter((log) => log.has_response && Number(log.unread_count || 0) > 0);
-    }
-
-    // Status filter
-    if (statusFilter && statusFilter !== 'ALL') {
-      if (statusFilter === 'RESPONSES') {
-        result = result.filter((log) => log.has_response);
-      } else {
-        const target = statusFilter.toUpperCase();
-        result = result.filter((log) => (log.status || '').toUpperCase() === target);
-      }
-    }
-
-    // Date-wise filter (exact local date matching)
-    if (responseDateFilter) {
-      result = result.filter((log) => {
-        const msgDate = toLocalDateString(log.sent_at || log.created_at);
-        if (statusFilter === 'RESPONSES') {
-          const respDate = toLocalDateString(log.latest_response_at);
-          return respDate === responseDateFilter || msgDate === responseDateFilter;
-        }
-        return msgDate === responseDateFilter;
-      });
-    }
-
-    // Search query filter (matches student name, class & section, phone, template, wamid, reply text)
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      result = result.filter((log) => {
-        const studentName = (log.student_name || '').toLowerCase();
-        const className = (log.class_section || log.class_name || '').toLowerCase();
-        const phone = (log.recipient_number || '').toLowerCase();
-        const template = (log.template_name || '').toLowerCase();
-        const wamid = (log.whatsapp_message_id || '').toLowerCase();
-        const respText = (log.latest_response_text || '').toLowerCase();
-        const logId = String(log.id || '');
-        const campId = String(log.campaign_id || '');
-        return (
-          studentName.includes(q) ||
-          className.includes(q) ||
-          phone.includes(q) ||
-          template.includes(q) ||
-          wamid.includes(q) ||
-          respText.includes(q) ||
-          logId.includes(q) ||
-          campId.includes(q)
-        );
-      });
-    }
-
-    return result;
-  }, [logs, statusFilter, responseDateFilter, searchQuery, showUnreadOnly]);
-
-  // Paginated logs for current page (10 logs per page)
-  const paginatedLogs = useMemo(() => {
-    const startIndex = (currentPage - 1) * PAGE_SIZE;
-    return filteredLogs.slice(startIndex, startIndex + PAGE_SIZE);
-  }, [filteredLogs, currentPage]);
+  // With backend pagination, the logs array is already the items for current page
+  const paginatedLogs = logs;
+  const filteredLogs = logs;
 
   const handleOpenConversation = (log) => {
     setActiveConversation({
@@ -548,7 +526,13 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             </span>
             <ScrollText className={`w-4 h-4 ${statusFilter === 'ALL' ? 'text-emerald-400' : 'text-slate-400'}`} />
           </div>
-          <p className="text-xl sm:text-2xl font-black mt-1">{counts.total}</p>
+          {loading && counts.total === 0 ? (
+            <div className="flex items-center gap-1.5 mt-1 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+            </div>
+          ) : (
+            <p className="text-xl sm:text-2xl font-black mt-1">{counts.total}</p>
+          )}
           <p className={`text-[10px] mt-0.5 ${statusFilter === 'ALL' ? 'text-slate-400' : 'text-slate-400'}`}>
             {campaignFilter === 'ALL' ? 'All campaigns' : `Campaign #${campaignFilter}`}
           </p>
@@ -572,7 +556,13 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             </span>
             <Clock className={`w-4 h-4 ${statusFilter === 'SENT' ? 'text-blue-200' : 'text-blue-500'}`} />
           </div>
-          <p className="text-xl sm:text-2xl font-black mt-1">{counts.sent}</p>
+          {loading && counts.total === 0 ? (
+            <div className="flex items-center gap-1.5 mt-1 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-300" />
+            </div>
+          ) : (
+            <p className="text-xl sm:text-2xl font-black mt-1">{counts.sent}</p>
+          )}
           <p className={`text-[10px] mt-0.5 ${statusFilter === 'SENT' ? 'text-blue-100' : 'text-slate-400'}`}>
             Dispatched to server
           </p>
@@ -596,7 +586,13 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             </span>
             <CheckCircle2 className={`w-4 h-4 ${statusFilter === 'DELIVERED' ? 'text-emerald-200' : 'text-emerald-500'}`} />
           </div>
-          <p className="text-xl sm:text-2xl font-black mt-1">{counts.delivered}</p>
+          {loading && counts.total === 0 ? (
+            <div className="flex items-center gap-1.5 mt-1 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-emerald-300" />
+            </div>
+          ) : (
+            <p className="text-xl sm:text-2xl font-black mt-1">{counts.delivered}</p>
+          )}
           <p className={`text-[10px] mt-0.5 ${statusFilter === 'DELIVERED' ? 'text-emerald-100' : 'text-slate-400'}`}>
             Handset received
           </p>
@@ -620,7 +616,13 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             </span>
             <Eye className={`w-4 h-4 ${statusFilter === 'READ' ? 'text-purple-200' : 'text-purple-500'}`} />
           </div>
-          <p className="text-xl sm:text-2xl font-black mt-1">{counts.read}</p>
+          {loading && counts.total === 0 ? (
+            <div className="flex items-center gap-1.5 mt-1 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-purple-300" />
+            </div>
+          ) : (
+            <p className="text-xl sm:text-2xl font-black mt-1">{counts.read}</p>
+          )}
           <p className={`text-[10px] mt-0.5 ${statusFilter === 'READ' ? 'text-purple-100' : 'text-slate-400'}`}>
             Opened & read
           </p>
@@ -644,7 +646,13 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             </span>
             <XCircle className={`w-4 h-4 ${statusFilter === 'FAILED' ? 'text-rose-200' : 'text-rose-500'}`} />
           </div>
-          <p className="text-xl sm:text-2xl font-black mt-1">{counts.failed}</p>
+          {loading && counts.total === 0 ? (
+            <div className="flex items-center gap-1.5 mt-1 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-rose-300" />
+            </div>
+          ) : (
+            <p className="text-xl sm:text-2xl font-black mt-1">{counts.failed}</p>
+          )}
           <p className={`text-[10px] mt-0.5 ${statusFilter === 'FAILED' ? 'text-rose-100' : 'text-slate-400'}`}>
             Undelivered errors
           </p>
@@ -668,7 +676,13 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
             </span>
             <MessageSquare className={`w-4 h-4 ${statusFilter === 'RESPONSES' ? 'text-teal-200' : 'text-teal-600'}`} />
           </div>
-          <p className="text-xl sm:text-2xl font-black mt-1">{counts.responses}</p>
+          {loading && counts.total === 0 ? (
+            <div className="flex items-center gap-1.5 mt-1 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-teal-300" />
+            </div>
+          ) : (
+            <p className="text-xl sm:text-2xl font-black mt-1">{counts.responses}</p>
+          )}
           <p className={`text-[10px] mt-0.5 flex items-center gap-1.5 ${statusFilter === 'RESPONSES' ? 'text-teal-100' : 'text-slate-500'}`}>
             {counts.unread_responses > 0 ? (
               <span className="inline-flex items-center gap-1 font-bold text-rose-500 bg-rose-50 px-1.5 py-0.2 rounded">
@@ -774,18 +788,22 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ml-1 ${
                 showUnreadOnly
                   ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm ring-2 ring-emerald-500/20'
-                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
+                  : (counts.unread_chats > 0
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-800')
               }`}
               title="Filter down to parents who are waiting for an answer"
             >
-              <span className={`w-2 h-2 rounded-full ${showUnreadOnly ? 'bg-white' : 'bg-emerald-500 animate-pulse'}`} />
+              <span className={`w-2 h-2 rounded-full ${showUnreadOnly ? 'bg-white' : (counts.unread_chats > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400')}`} />
               <span>Show Unread Only</span>
               <span
                 className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                  showUnreadOnly ? 'bg-emerald-700 text-white' : 'bg-emerald-200 text-emerald-900'
+                  showUnreadOnly
+                    ? 'bg-emerald-700 text-white'
+                    : (counts.unread_chats > 0 ? 'bg-emerald-200 text-emerald-900' : 'bg-slate-200 text-slate-600')
                 }`}
               >
-                {counts.unread_chats}
+                {counts.unread_chats || 0}
               </span>
             </button>
           </div>
@@ -860,7 +878,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
               <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-teal-800 bg-teal-50 px-2.5 py-1 rounded-xl border border-teal-200">
                 <Check className="w-3 h-3 text-teal-600 shrink-0" />
                 <span>Date: {new Date(responseDateFilter + 'T00:00:00').toLocaleDateString()}</span>
-                <span className="font-bold text-teal-900">({filteredLogs.length} logs)</span>
+                <span className="font-bold text-teal-900">({totalLogs} logs)</span>
               </span>
             )}
           </div>
@@ -887,12 +905,12 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
               {selectedIds.length}
             </span>
             <span>message log(s) selected for deletion</span>
-            {selectedIds.length < filteredLogs.length && (
+            {selectedIds.length < totalLogs && (
               <button
                 onClick={handleSelectAllLoaded}
                 className="underline text-xs text-rose-700 hover:text-rose-900 font-bold ml-2"
               >
-                Select all {filteredLogs.length} matching logs
+                Select all {logs.length} loaded logs
               </button>
             )}
           </div>
@@ -929,7 +947,15 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
           }
         />
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+        <div className="relative bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+          {loading && (
+            <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex flex-col items-center justify-center z-20 transition-all">
+              <div className="flex items-center gap-2.5 px-4 py-2.5 bg-white border border-slate-200 rounded-2xl shadow-lg">
+                <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs font-bold text-slate-800">Loading page {loadingPage || currentPage}...</span>
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm text-slate-700 min-w-[980px]">
               <thead className="bg-slate-50/80 text-xs uppercase font-semibold text-slate-500 border-b border-slate-200">
@@ -1126,10 +1152,11 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
           {/* 10 logs per page Pagination */}
           <Pagination
             currentPage={currentPage}
-            totalItems={filteredLogs.length}
+            totalItems={totalLogs}
             pageSize={PAGE_SIZE}
-            onPageChange={setCurrentPage}
+            onPageChange={(p) => fetchLogsPage(p)}
             itemLabel="message logs"
+            loading={loading}
           />
         </div>
       )}

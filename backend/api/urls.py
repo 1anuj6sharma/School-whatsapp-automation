@@ -31,6 +31,7 @@ from .views import (
     ComplaintFeedbackDetailView,
     ComplaintFeedbackStatsView,
     BotUserProfileListView,
+    DashboardStatsView,
 )
 
 urlpatterns = [
@@ -124,4 +125,8 @@ urlpatterns = [
     # Bot Profiles API
     path("api/bot/profiles", BotUserProfileListView.as_view(), name="bot-profiles-list"),
     path("api/bot/profiles/", BotUserProfileListView.as_view(), name="bot-profiles-list-slash"),
+
+    # Dashboard Stats API
+    path("api/dashboard/stats", DashboardStatsView.as_view(), name="dashboard-stats"),
+    path("api/dashboard/stats/", DashboardStatsView.as_view(), name="dashboard-stats-slash"),
 ]

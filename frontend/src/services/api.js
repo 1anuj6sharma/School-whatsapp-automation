@@ -59,6 +59,9 @@ async function handleResponse(response) {
   return response.json();
 }
 
+let _classesCache = null;
+let _templatesCache = null;
+
 export const api = {
   // Authentication
   async login(email, password) {
@@ -100,10 +103,25 @@ export const api = {
     return handleResponse(res);
   },
 
-  // Classes
-  async getClasses() {
-    const res = await fetch(`${API_BASE}/api/classes`);
+  // Dashboard Stats
+  async getDashboardStats() {
+    const res = await fetch(`${API_BASE}/api/dashboard/stats`);
     return handleResponse(res);
+  },
+
+  // Classes
+  async getClasses(forceRefresh = false) {
+    if (!forceRefresh && _classesCache) {
+      return _classesCache;
+    }
+    const res = await fetch(`${API_BASE}/api/classes`);
+    const data = await handleResponse(res);
+    _classesCache = data;
+    return data;
+  },
+
+  clearClassCache() {
+    _classesCache = null;
   },
 
   async getClass(id) {
@@ -112,6 +130,7 @@ export const api = {
   },
 
   async createClass(data) {
+    _classesCache = null;
     const res = await fetch(`${API_BASE}/api/classes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -121,6 +140,7 @@ export const api = {
   },
 
   async updateClass(id, data) {
+    _classesCache = null;
     const res = await fetch(`${API_BASE}/api/classes/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -130,6 +150,7 @@ export const api = {
   },
 
   async deleteClass(id) {
+    _classesCache = null;
     const res = await fetch(`${API_BASE}/api/classes/${id}`, {
       method: 'DELETE',
     });
@@ -153,6 +174,12 @@ export const api = {
     }
     if (params?.fees_filter) {
       url.searchParams.append('fees_filter', params.fees_filter);
+    }
+    if (params?.page) {
+      url.searchParams.append('page', params.page.toString());
+    }
+    if (params?.page_size) {
+      url.searchParams.append('page_size', params.page_size.toString());
     }
 
     const res = await fetch(url.pathname + url.search);
@@ -198,9 +225,18 @@ export const api = {
   },
 
   // Templates
-  async getTemplates() {
+  async getTemplates(forceRefresh = false) {
+    if (!forceRefresh && _templatesCache) {
+      return _templatesCache;
+    }
     const res = await fetch(`${API_BASE}/api/templates`);
-    return handleResponse(res);
+    const data = await handleResponse(res);
+    _templatesCache = data;
+    return data;
+  },
+
+  clearTemplatesCache() {
+    _templatesCache = null;
   },
 
   async getTemplate(id) {
@@ -209,6 +245,7 @@ export const api = {
   },
 
   async syncTemplates() {
+    _templatesCache = null;
     const res = await fetch(`${API_BASE}/api/templates/sync`, {
       method: 'POST',
     });
@@ -216,6 +253,7 @@ export const api = {
   },
 
   async createTemplate(data) {
+    _templatesCache = null;
     const res = await fetch(`${API_BASE}/api/templates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -225,6 +263,7 @@ export const api = {
   },
 
   async updateTemplate(id, data) {
+    _templatesCache = null;
     const res = await fetch(`${API_BASE}/api/templates/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -234,6 +273,7 @@ export const api = {
   },
 
   async deleteTemplate(id) {
+    _templatesCache = null;
     const res = await fetch(`${API_BASE}/api/templates/${id}`, {
       method: 'DELETE',
     });
@@ -252,8 +292,12 @@ export const api = {
   },
 
   // Campaigns
-  async getCampaigns() {
-    const res = await fetch(`${API_BASE}/api/campaigns`);
+  async getCampaigns(params) {
+    const url = new URL(`${window.location.origin}/api/campaigns`);
+    if (params?.search) url.searchParams.append('search', params.search);
+    if (params?.page) url.searchParams.append('page', params.page.toString());
+    if (params?.page_size) url.searchParams.append('page_size', params.page_size.toString());
+    const res = await fetch(url.pathname + url.search);
     return handleResponse(res);
   },
 
@@ -293,11 +337,15 @@ export const api = {
     if (params?.campaign_id) url.searchParams.append('campaign_id', params.campaign_id.toString());
     if (params?.student_id) url.searchParams.append('student_id', params.student_id.toString());
     if (params?.status && params.status !== 'ALL') url.searchParams.append('status', params.status);
+    if (params?.search) url.searchParams.append('search', params.search);
     if (params?.date) url.searchParams.append('date', params.date);
     if (params?.from_date) url.searchParams.append('from_date', params.from_date);
     if (params?.to_date) url.searchParams.append('to_date', params.to_date);
     if (params?.before_date) url.searchParams.append('before_date', params.before_date);
     if (params?.response_date) url.searchParams.append('response_date', params.response_date);
+    if (params?.unread_only) url.searchParams.append('unread_only', 'true');
+    if (params?.page) url.searchParams.append('page', params.page.toString());
+    if (params?.page_size) url.searchParams.append('page_size', params.page_size.toString());
     if (params?.limit) url.searchParams.append('limit', params.limit.toString());
 
     const res = await fetch(url.pathname + url.search);

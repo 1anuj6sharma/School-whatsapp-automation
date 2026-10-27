@@ -24,7 +24,8 @@ import {
   ExternalLink,
   MessageCircle,
   HelpCircle,
-  Inbox
+  Inbox,
+  Loader2
 } from 'lucide-react';
 import { api } from '../services/api';
 import { ConversationDrawer } from '../components/ConversationDrawer';
@@ -287,7 +288,14 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
               <Inbox className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-bold text-slate-900 mt-2">{stats.total || 0}</p>
+          {isLoading ? (
+            <div className="flex items-center gap-1.5 mt-2 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+              <span className="text-xs text-slate-400 font-medium">Loading...</span>
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-slate-900 mt-2">{stats.total || 0}</p>
+          )}
           <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
             <span>Complaints + Feedbacks</span>
           </div>
@@ -301,7 +309,14 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
               <AlertCircle className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-bold text-rose-700 mt-2">{stats.complaints || 0}</p>
+          {isLoading ? (
+            <div className="flex items-center gap-1.5 mt-2 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-rose-500" />
+              <span className="text-xs text-rose-400 font-medium">Loading...</span>
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-rose-700 mt-2">{stats.complaints || 0}</p>
+          )}
           <span className="text-[11px] text-rose-600 font-medium">Study, School & Teacher</span>
         </div>
 
@@ -313,7 +328,14 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
               <MessageSquare className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-bold text-blue-700 mt-2">{stats.feedbacks || 0}</p>
+          {isLoading ? (
+            <div className="flex items-center gap-1.5 mt-2 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+              <span className="text-xs text-blue-400 font-medium">Loading...</span>
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-blue-700 mt-2">{stats.feedbacks || 0}</p>
+          )}
           <span className="text-[11px] text-blue-600 font-medium">Suggestions & Praise</span>
         </div>
 
@@ -325,7 +347,14 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
               <Clock className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-bold text-amber-700 mt-2">{stats.pending || 0}</p>
+          {isLoading ? (
+            <div className="flex items-center gap-1.5 mt-2 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-amber-500" />
+              <span className="text-xs text-amber-400 font-medium">Loading...</span>
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-amber-700 mt-2">{stats.pending || 0}</p>
+          )}
           <span className="text-[11px] text-amber-600 font-medium">Needs Review</span>
         </div>
 
@@ -337,7 +366,14 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
               <CheckCircle2 className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-bold text-emerald-700 mt-2">{stats.resolved || 0}</p>
+          {isLoading ? (
+            <div className="flex items-center gap-1.5 mt-2 h-8">
+              <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
+              <span className="text-xs text-emerald-500 font-medium">Loading...</span>
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-emerald-700 mt-2">{stats.resolved || 0}</p>
+          )}
           <span className="text-[11px] text-emerald-600 font-medium">Closed & Addressed</span>
         </div>
       </div>
@@ -495,7 +531,7 @@ export function ComplaintsFeedbackPage({ showToast, onNavigateToConversation }) 
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
         {isLoading ? (
           <div className="p-12 flex flex-col items-center justify-center gap-3">
-            <div className="w-8 h-8 border-3 border-emerald-500/30 border-t-emerald-600 rounded-full animate-spin"></div>
+            <div className="w-8 h-8 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div>
             <p className="text-xs text-slate-500 font-medium">Loading complaints & feedback...</p>
           </div>
         ) : items.length === 0 ? (

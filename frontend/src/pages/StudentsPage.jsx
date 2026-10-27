@@ -35,6 +35,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
 
   // Pagination state (10 records per page)
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadingPage, setLoadingPage] = useState(1);
 
   // Checkbox Selection state for Students
   const [selectedStudentIds, setSelectedStudentIds] = useState([]);
@@ -90,22 +91,58 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
   const [formOptIn, setFormOptIn] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const fetchData = async () => {
+  const [totalStudents, setTotalStudents] = useState(0);
+  const pageCacheRef = useRef({});
+
+  const fetchClasses = async () => {
+    try {
+      const classesData = await api.getClasses();
+      setClasses(classesData || []);
+    } catch (err) {
+      console.error('Failed to load classes', err);
+    }
+  };
+
+  const fetchStudentsPage = async (pageNumber = 1, force = false) => {
+    // Check in-memory page cache first
+    if (!force && pageCacheRef.current[pageNumber]) {
+      const cached = pageCacheRef.current[pageNumber];
+      setStudents(cached.results);
+      setTotalStudents(cached.count);
+      setCurrentPage(pageNumber);
+      setLoadingPage(pageNumber);
+      return;
+    }
+
+    setLoadingPage(pageNumber);
+    setCurrentPage(pageNumber);
     setLoading(true);
     try {
-      const [classesData, studentsData] = await Promise.all([
-        api.getClasses(),
-        api.getStudents({
-          class_ids: selectedClassIds.length > 0 ? selectedClassIds : undefined,
-          search: searchTerm ? searchTerm : undefined,
-          opt_in: optInFilter === 'ALL' ? undefined : optInFilter === 'OPTED_IN',
-          fees_filter: feeFilter === 'ALL' ? undefined : feeFilter,
-        }),
-      ]);
-      setClasses(classesData);
-      setStudents(studentsData);
-      // Auto-select all students when list is fetched or filtered
-      setSelectedStudentIds(studentsData.map((s) => s.id));
+      const res = await api.getStudents({
+        page: pageNumber,
+        page_size: PAGE_SIZE,
+        class_ids: selectedClassIds.length > 0 ? selectedClassIds : undefined,
+        search: searchTerm ? searchTerm : undefined,
+        opt_in: optInFilter === 'ALL' ? undefined : optInFilter === 'OPTED_IN',
+        fees_filter: feeFilter === 'ALL' ? undefined : feeFilter,
+      });
+
+      const results = Array.isArray(res) ? res : (res?.results || []);
+      const count = typeof res?.count === 'number' ? res.count : results.length;
+
+      // Cache this page
+      pageCacheRef.current[pageNumber] = { results, count };
+
+      setStudents(results);
+      setTotalStudents(count);
+      setCurrentPage(pageNumber);
+
+      // Auto-select students on this page if nothing selected yet or keep selection updated
+      setSelectedStudentIds((prev) => {
+        const pageIds = results.map((s) => s.id);
+        if (prev.length === 0) return pageIds;
+        return Array.from(new Set([...prev, ...pageIds]));
+      });
     } catch (err) {
       showToast({
         type: 'error',
@@ -116,6 +153,21 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
       setLoading(false);
     }
   };
+
+  const fetchData = (force = true) => {
+    pageCacheRef.current = {};
+    fetchStudentsPage(currentPage, true);
+  };
+
+  useEffect(() => {
+    fetchClasses();
+  }, []);
+
+  useEffect(() => {
+    // When class, opt-in or fee filters change, clear cache and reset to page 1
+    pageCacheRef.current = {};
+    fetchStudentsPage(1, true);
+  }, [selectedClassIds.join(','), optInFilter, feeFilter]);
 
   const handleToggleSelectStudent = (studentId) => {
     setSelectedStudentIds((prev) => {
@@ -128,10 +180,12 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
   };
 
   const handleToggleSelectAll = () => {
-    if (selectedStudentIds.length === students.length && students.length > 0) {
-      setSelectedStudentIds([]);
+    const pageStudentIds = students.map((s) => s.id);
+    const allOnPageSelected = pageStudentIds.length > 0 && pageStudentIds.every((id) => selectedStudentIds.includes(id));
+    if (allOnPageSelected) {
+      setSelectedStudentIds((prev) => prev.filter((id) => !pageStudentIds.includes(id)));
     } else {
-      setSelectedStudentIds(students.map((s) => s.id));
+      setSelectedStudentIds((prev) => Array.from(new Set([...prev, ...pageStudentIds])));
     }
   };
 
@@ -193,33 +247,13 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
     });
   };
 
-  useEffect(() => {
-    fetchData();
-  }, [selectedClassIds.join(','), optInFilter, feeFilter]);
-
-  // Reset to first page when search or filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [selectedClassIds.join(','), optInFilter, feeFilter, searchTerm]);
-
-  // Derived paginated slice of students (10 per page)
-  const totalPages = Math.max(1, Math.ceil(students.length / PAGE_SIZE));
-
-  useEffect(() => {
-    if (currentPage > totalPages && totalPages > 0) {
-      setCurrentPage(totalPages);
-    }
-  }, [totalPages, currentPage]);
-
-  const paginatedStudents = useMemo(() => {
-    const startIndex = (currentPage - 1) * PAGE_SIZE;
-    return students.slice(startIndex, startIndex + PAGE_SIZE);
-  }, [students, currentPage]);
+  // With backend pagination, the students array is already the 10 students for the current page
+  const paginatedStudents = students;
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
-    setCurrentPage(1);
-    fetchData();
+    pageCacheRef.current = {};
+    fetchStudentsPage(1, true);
   };
 
   const openAddModal = () => {
@@ -702,7 +736,7 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
       </div>
 
       {/* Students Table */}
-      {loading ? (
+      {loading && students.length === 0 ? (
         <LoadingSpinner message="Loading students list..." />
       ) : students.length === 0 ? (
         <EmptyState
@@ -713,20 +747,40 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
           onAction={openAddModal}
         />
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+        <div className="relative bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+          {loading && (
+            <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex flex-col items-center justify-center z-20 transition-all">
+              <div className="flex items-center gap-2.5 px-4 py-2.5 bg-white border border-slate-200 rounded-2xl shadow-lg">
+                <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs font-bold text-slate-800">Loading page {loadingPage || currentPage}...</span>
+              </div>
+            </div>
+          )}
           {/* Top Selection Status Toolbar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-6 py-2.5 bg-slate-50/90 border-b border-slate-200 text-xs">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-bold text-slate-800">
-                {selectedStudentIds.length} of {students.length} students selected
+                {selectedStudentIds.length} of {totalStudents || students.length} students selected
               </span>
-              {selectedStudentIds.length < students.length && (
+              {selectedStudentIds.length < (totalStudents || students.length) && (
                 <button
                   type="button"
-                  onClick={() => setSelectedStudentIds(students.map((s) => s.id))}
+                  onClick={async () => {
+                    try {
+                      const allData = await api.getStudents({
+                        class_ids: selectedClassIds.length > 0 ? selectedClassIds : undefined,
+                        search: searchTerm ? searchTerm : undefined,
+                        opt_in: optInFilter === 'ALL' ? undefined : optInFilter === 'OPTED_IN',
+                        fees_filter: feeFilter === 'ALL' ? undefined : feeFilter,
+                      });
+                      setSelectedStudentIds((allData || []).map((s) => s.id));
+                    } catch {
+                      setSelectedStudentIds(students.map((s) => s.id));
+                    }
+                  }}
                   className="text-emerald-700 hover:text-emerald-800 font-semibold underline cursor-pointer"
                 >
-                  Select all ({students.length})
+                  Select all ({totalStudents || students.length})
                 </button>
               )}
               {selectedStudentIds.length > 0 && (
@@ -905,10 +959,11 @@ export const StudentsPage = ({ onNavigateToSendMessage, showToast }) => {
           {/* 10 Students per page Pagination */}
           <Pagination
             currentPage={currentPage}
-            totalItems={students.length}
+            totalItems={totalStudents}
             pageSize={PAGE_SIZE}
-            onPageChange={setCurrentPage}
+            onPageChange={(p) => fetchStudentsPage(p)}
             itemLabel="students"
+            loading={loading}
           />
         </div>
       )}

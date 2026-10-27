@@ -6,32 +6,29 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { EmptyState } from '../components/EmptyState';
 import { api } from '../services/api';
 
+// Module-level in-memory cache for instant dashboard transitions
+let cachedDashboardStats = null;
+
 export const DashboardPage = ({ onNavigate }) => {
-  const [loading, setLoading] = useState(true);
-  const [totalStudents, setTotalStudents] = useState(0);
-  const [totalClasses, setTotalClasses] = useState(0);
-  const [messagesSent, setMessagesSent] = useState(0);
-  const [messagesFailed, setMessagesFailed] = useState(0);
-  const [recentCampaigns, setRecentCampaigns] = useState([]);
+  const [loading, setLoading] = useState(!cachedDashboardStats);
+  const [totalStudents, setTotalStudents] = useState(cachedDashboardStats?.total_students || 0);
+  const [totalClasses, setTotalClasses] = useState(cachedDashboardStats?.total_classes || 0);
+  const [messagesSent, setMessagesSent] = useState(cachedDashboardStats?.messages_sent || 0);
+  const [messagesFailed, setMessagesFailed] = useState(cachedDashboardStats?.messages_failed || 0);
+  const [recentCampaigns, setRecentCampaigns] = useState(cachedDashboardStats?.recent_campaigns || []);
 
   const loadData = async () => {
-    setLoading(true);
+    if (!cachedDashboardStats) {
+      setLoading(true);
+    }
     try {
-      const [students, classes, campaigns, logs] = await Promise.all([
-        api.getStudents(),
-        api.getClasses(),
-        api.getCampaigns(),
-        api.getMessageLogs({ limit: 500 }),
-      ]);
-
-      setTotalStudents(students.length);
-      setTotalClasses(classes.length);
-      setRecentCampaigns(campaigns.slice(0, 5));
-
-      const sentCount = logs.filter((l) => ['SENT', 'DELIVERED', 'READ'].includes(l.status)).length;
-      const failedCount = logs.filter((l) => l.status === 'FAILED').length;
-      setMessagesSent(sentCount);
-      setMessagesFailed(failedCount);
+      const stats = await api.getDashboardStats();
+      cachedDashboardStats = stats;
+      setTotalStudents(stats.total_students || 0);
+      setTotalClasses(stats.total_classes || 0);
+      setMessagesSent(stats.messages_sent || 0);
+      setMessagesFailed(stats.messages_failed || 0);
+      setRecentCampaigns(stats.recent_campaigns || []);
     } catch (err) {
       console.error('Failed loading dashboard stats:', err);
     } finally {

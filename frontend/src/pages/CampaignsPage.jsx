@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   Layers,
   Send,
@@ -32,6 +32,7 @@ export const CampaignsPage = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadingPage, setLoadingPage] = useState(1);
 
   // Date Delete Modal State
   const [isDateModalOpen, setIsDateModalOpen] = useState(false);
@@ -40,11 +41,39 @@ export const CampaignsPage = ({
   const [toDate, setToDate] = useState('');
   const [beforeDate, setBeforeDate] = useState('');
 
-  const fetchCampaigns = async () => {
+  const [totalCampaigns, setTotalCampaigns] = useState(0);
+  const pageCacheRef = useRef({});
+
+  const fetchCampaignsPage = async (pageNumber = 1, force = false) => {
+    // Check in-memory page cache first
+    if (!force && pageCacheRef.current[pageNumber]) {
+      const cached = pageCacheRef.current[pageNumber];
+      setCampaigns(cached.results);
+      setTotalCampaigns(cached.count);
+      setCurrentPage(pageNumber);
+      setLoadingPage(pageNumber);
+      return;
+    }
+
+    setLoadingPage(pageNumber);
+    setCurrentPage(pageNumber);
     setLoading(true);
     try {
-      const data = await api.getCampaigns();
-      setCampaigns(data || []);
+      const res = await api.getCampaigns({
+        page: pageNumber,
+        page_size: PAGE_SIZE,
+        search: searchQuery.trim() || undefined,
+      });
+
+      const results = Array.isArray(res) ? res : (res?.results || []);
+      const count = typeof res?.count === 'number' ? res.count : results.length;
+
+      // Cache this page
+      pageCacheRef.current[pageNumber] = { results, count };
+
+      setCampaigns(results);
+      setTotalCampaigns(count);
+      setCurrentPage(pageNumber);
     } catch (err) {
       console.error('Failed to fetch campaigns', err);
       showToast?.({
@@ -57,35 +86,42 @@ export const CampaignsPage = ({
     }
   };
 
+  const fetchCampaigns = (force = true) => {
+    pageCacheRef.current = {};
+    fetchCampaignsPage(currentPage, true);
+  };
+
+  // Debounced search effect
   useEffect(() => {
-    fetchCampaigns();
-    const interval = setInterval(fetchCampaigns, 10000); // auto-refresh active campaigns
+    const handler = setTimeout(() => {
+      pageCacheRef.current = {};
+      fetchCampaignsPage(1, true);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // Periodic background status refresh for the active page
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Background poll without wiping full cache
+      api.getCampaigns({
+        page: currentPage,
+        page_size: PAGE_SIZE,
+        search: searchQuery.trim() || undefined,
+      }).then((res) => {
+        if (res && res.results) {
+          pageCacheRef.current[currentPage] = { results: res.results, count: res.count };
+          setCampaigns(res.results);
+          if (typeof res.count === 'number') setTotalCampaigns(res.count);
+        }
+      }).catch(() => {});
+    }, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentPage, searchQuery]);
 
-  // Filter campaigns by search query
-  const filteredCampaigns = useMemo(() => {
-    if (!searchQuery.trim()) return campaigns;
-    const q = searchQuery.toLowerCase().trim();
-    return campaigns.filter((c) => {
-      const idStr = String(c.id || '');
-      const className = (c.class_name || '').toLowerCase();
-      const templateName = (c.template_name || '').toLowerCase();
-      const status = (c.status || '').toLowerCase();
-      return (
-        idStr.includes(q) ||
-        className.includes(q) ||
-        templateName.includes(q) ||
-        status.includes(q)
-      );
-    });
-  }, [campaigns, searchQuery]);
-
-  // Paginated campaigns (10 per page)
-  const paginatedCampaigns = useMemo(() => {
-    const startIndex = (currentPage - 1) * PAGE_SIZE;
-    return filteredCampaigns.slice(startIndex, startIndex + PAGE_SIZE);
-  }, [filteredCampaigns, currentPage]);
+  // With backend pagination, the campaigns array is already the items for the current page
+  const paginatedCampaigns = campaigns;
+  const filteredCampaigns = campaigns;
 
   // Selection handlers
   const handleSelectPage = (e) => {
@@ -99,7 +135,7 @@ export const CampaignsPage = ({
   };
 
   const handleSelectAllLoaded = () => {
-    setSelectedIds(filteredCampaigns.map((c) => c.id));
+    setSelectedIds(paginatedCampaigns.map((c) => c.id));
   };
 
   const handleToggleSelect = (id) => {
@@ -304,7 +340,7 @@ export const CampaignsPage = ({
         </div>
 
         <div className="text-xs font-bold text-slate-600 flex items-center gap-2 px-2">
-          <span>Total: <strong className="text-slate-900">{campaigns.length}</strong> broadcasts</span>
+          <span>Total: <strong className="text-slate-900">{totalCampaigns}</strong> broadcasts</span>
         </div>
       </div>
 
@@ -359,7 +395,15 @@ export const CampaignsPage = ({
           description={`No broadcast campaigns match "${searchQuery}".`}
         />
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+        <div className="relative bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+          {loading && (
+            <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex flex-col items-center justify-center z-20 transition-all">
+              <div className="flex items-center gap-2.5 px-4 py-2.5 bg-white border border-slate-200 rounded-2xl shadow-lg">
+                <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs font-bold text-slate-800">Loading page {loadingPage || currentPage}...</span>
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm text-slate-700 min-w-[850px]">
               <thead className="bg-slate-50/80 text-xs uppercase font-semibold text-slate-500 border-b border-slate-200">
@@ -486,10 +530,11 @@ export const CampaignsPage = ({
           {/* 10 Campaigns per page Pagination */}
           <Pagination
             currentPage={currentPage}
-            totalItems={filteredCampaigns.length}
+            totalItems={totalCampaigns}
             pageSize={PAGE_SIZE}
-            onPageChange={setCurrentPage}
+            onPageChange={(p) => fetchCampaignsPage(p)}
             itemLabel="broadcast campaigns"
+            loading={loading}
           />
         </div>
       )}

@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import math
 import uuid
 from pathlib import Path
 import asyncio
@@ -146,6 +147,32 @@ class StudentListCreateView(APIView):
                 | Q(parent_name__icontains=s_term)
                 | Q(whatsapp_number__icontains=s_term)
             )
+
+        page = request.query_params.get("page")
+        page_size = request.query_params.get("page_size")
+
+        if page is not None and str(page).strip() != "":
+            try:
+                page_num = max(1, int(page))
+            except (ValueError, TypeError):
+                page_num = 1
+            try:
+                p_size = max(1, min(200, int(page_size))) if page_size else 10
+            except (ValueError, TypeError):
+                p_size = 10
+
+            total_count = qs.count()
+            total_pages = max(1, math.ceil(total_count / p_size)) if total_count > 0 else 1
+            offset = (page_num - 1) * p_size
+            paginated_qs = qs[offset : offset + p_size]
+            serializer = StudentSerializer(paginated_qs, many=True)
+            return Response({
+                "count": total_count,
+                "total_pages": total_pages,
+                "current_page": page_num,
+                "page_size": p_size,
+                "results": serializer.data,
+            })
 
         serializer = StudentSerializer(qs, many=True)
         return Response(serializer.data)
@@ -531,8 +558,8 @@ class TemplateListCreateView(APIView):
         if not include_archived:
             qs = qs.exclude(status__in=["PENDING_DELETION", "ARCHIVED", "DELETED"]).exclude(name__iexact="hello_world")
         templates = list(qs)
-
-        if not templates or len(templates) <= 2:
+        sync_requested = request.query_params.get("sync", "false").lower() in ("true", "1")
+        if (not templates and not MessageTemplate.objects.exists()) or sync_requested:
             try:
                 meta_templates = asyncio.run(whatsapp_service.fetch_templates_from_meta())
                 for item in meta_templates:
@@ -743,11 +770,44 @@ class TemplateDetailView(APIView):
 
 class CampaignListCreateView(APIView):
     def get(self, request):
-        campaigns = list(
+        search = request.query_params.get("search")
+        page = request.query_params.get("page")
+        page_size = request.query_params.get("page_size")
+
+        qs = (
             MessageCampaign.objects.select_related("school_class", "template")
             .prefetch_related("message_logs")
             .order_by("-created_at")
         )
+
+        if search and search.strip():
+            s = search.strip()
+            search_q = (
+                Q(template__name__icontains=s)
+                | Q(school_class__name__icontains=s)
+                | Q(status__icontains=s)
+            )
+            if s.isdigit():
+                search_q |= Q(id=int(s))
+            qs = qs.filter(search_q)
+
+        is_paginated = page is not None and str(page).strip() != ""
+        if is_paginated:
+            try:
+                page_num = max(1, int(page))
+            except (ValueError, TypeError):
+                page_num = 1
+            try:
+                p_size = max(1, min(200, int(page_size))) if page_size else 10
+            except (ValueError, TypeError):
+                p_size = 10
+
+            total_count = qs.count()
+            total_pages = max(1, math.ceil(total_count / p_size)) if total_count > 0 else 1
+            offset = (page_num - 1) * p_size
+            campaigns = list(qs[offset : offset + p_size])
+        else:
+            campaigns = list(qs)
 
         for c in campaigns:
             sent_cnt = c.message_logs.filter(status__in=["SENT", "DELIVERED", "READ"]).count()
@@ -770,6 +830,14 @@ class CampaignListCreateView(APIView):
                 c.save(update_fields=["successful_count", "failed_count", "status", "completed_at"])
 
         serializer = CampaignSerializer(campaigns, many=True)
+        if is_paginated:
+            return Response({
+                "count": total_count,
+                "total_pages": total_pages,
+                "current_page": page_num,
+                "page_size": p_size,
+                "results": serializer.data,
+            })
         return Response(serializer.data)
 
     def post(self, request):
@@ -894,15 +962,38 @@ class MessageLogListView(APIView):
         campaign_id = request.query_params.get("campaign_id")
         student_id = request.query_params.get("student_id")
         status_filter = request.query_params.get("status")
+        search = request.query_params.get("search")
         date_param = request.query_params.get("date")
         from_date = request.query_params.get("from_date")
         to_date = request.query_params.get("to_date")
         before_date = request.query_params.get("before_date")
         response_date = request.query_params.get("response_date")
-        limit = int(request.query_params.get("limit", 2000))
-        offset = int(request.query_params.get("offset", 0))
+        page = request.query_params.get("page")
+        page_size = request.query_params.get("page_size")
 
         qs = MessageLog.objects.select_related("student__school_class", "campaign__school_class").order_by("-created_at")
+
+        # Identify inbound chat criteria for responses
+        inbound_phones = list(
+            ChatMessage.objects.filter(direction="INBOUND")
+            .exclude(phone_number__isnull=True)
+            .exclude(phone_number="")
+            .values_list("phone_number", flat=True)
+            .distinct()
+        )
+        inbound_student_ids = list(
+            ChatMessage.objects.filter(direction="INBOUND", student_id__isnull=False)
+            .values_list("student_id", flat=True)
+            .distinct()
+        )
+        resp_q = Q()
+        if inbound_student_ids:
+            resp_q |= Q(student_id__in=inbound_student_ids)
+        phone_tails = {p[-10:] for p in inbound_phones if len(p) >= 10}
+        for tail in phone_tails:
+            resp_q |= Q(recipient_number__endswith=tail)
+
+        unread_only = request.query_params.get("unread_only", "").lower() in ("true", "1")
 
         if campaign_id and str(campaign_id).strip().upper() not in ("ALL", "", "NONE"):
             qs = qs.filter(campaign_id=campaign_id)
@@ -910,13 +1001,47 @@ class MessageLogListView(APIView):
             qs = qs.filter(student_id=student_id)
         if status_filter and str(status_filter).strip().upper() not in ("ALL", "", "NONE", "RESPONSES", "RESPONDED"):
             qs = qs.filter(status__iexact=str(status_filter).strip())
+        elif status_filter and str(status_filter).strip().upper() in ("RESPONSES", "RESPONDED"):
+            if resp_q:
+                qs = qs.filter(resp_q)
+            else:
+                qs = qs.none()
+
+        if unread_only:
+            unread_msgs = ChatMessage.objects.filter(direction="INBOUND", status__in=["RECEIVED", "UNREAD"])
+            unread_phones = list(unread_msgs.exclude(phone_number__isnull=True).exclude(phone_number="").values_list("phone_number", flat=True).distinct())
+            unread_student_ids = list(unread_msgs.filter(student_id__isnull=False).values_list("student_id", flat=True).distinct())
+            unread_q = Q()
+            if unread_student_ids:
+                unread_q |= Q(student_id__in=unread_student_ids)
+            for tail in {p[-10:] for p in unread_phones if len(p) >= 10}:
+                unread_q |= Q(recipient_number__endswith=tail)
+            if unread_q:
+                qs = qs.filter(unread_q)
+            else:
+                qs = qs.none()
+
+        if search and search.strip():
+            s = search.strip()
+            search_q = (
+                Q(student_name__icontains=s)
+                | Q(recipient_number__icontains=s)
+                | Q(template_name__icontains=s)
+                | Q(whatsapp_message_id__icontains=s)
+                | Q(student__student_name__icontains=s)
+                | Q(student__parent_name__icontains=s)
+                | Q(class_name__icontains=s)
+            )
+            if s.isdigit():
+                search_q |= Q(id=int(s)) | Q(campaign_id=int(s))
+            qs = qs.filter(search_q)
 
         # Exact date filter (applied to sent_at or created_at)
         if date_param and str(date_param).strip():
             parsed_d = parse_date(str(date_param).strip())
             if parsed_d:
                 if status_filter and str(status_filter).strip().upper() in ("RESPONSES", "RESPONDED"):
-                    pass # Will filter on response/dispatch date below
+                    pass # Handled below
                 else:
                     qs = qs.filter(Q(sent_at__date=parsed_d) | (Q(sent_at__isnull=True) & Q(created_at__date=parsed_d)))
 
@@ -933,7 +1058,25 @@ class MessageLogListView(APIView):
             if parsed_before:
                 qs = qs.filter(created_at__date__lt=parsed_before)
 
-        logs = list(qs[offset : offset + limit])
+        is_paginated = page is not None and str(page).strip() != ""
+        if is_paginated:
+            try:
+                page_num = max(1, int(page))
+            except (ValueError, TypeError):
+                page_num = 1
+            try:
+                p_size = max(1, min(200, int(page_size))) if page_size else 10
+            except (ValueError, TypeError):
+                p_size = 10
+
+            total_count = qs.count()
+            total_pages = max(1, math.ceil(total_count / p_size)) if total_count > 0 else 1
+            offset = (page_num - 1) * p_size
+            logs = list(qs[offset : offset + p_size])
+        else:
+            limit = int(request.query_params.get("limit", 2000))
+            offset = int(request.query_params.get("offset", 0))
+            logs = list(qs[offset : offset + limit])
 
         # Optimize: Batch query inbound ChatMessages for these logs
         student_ids = {l.student_id for l in logs if l.student_id}
@@ -985,24 +1128,83 @@ class MessageLogListView(APIView):
             l.latest_response_at = matched[0].created_at if matched else None
             l.latest_response_text = (matched[0].text_content or f"[{matched[0].message_type}]") if matched else None
 
-        if status_filter and str(status_filter).strip().upper() in ("RESPONSES", "RESPONDED"):
-            logs = [l for l in logs if l.has_response]
-            if date_param and str(date_param).strip():
-                parsed_d = parse_date(str(date_param).strip())
-                if parsed_d:
-                    logs = [
-                        l for l in logs
-                        if (l.latest_response_at and l.latest_response_at.date() == parsed_d)
-                        or (l.sent_at and l.sent_at.date() == parsed_d)
-                        or (l.created_at and l.created_at.date() == parsed_d)
-                    ]
-
         if response_date and str(response_date).strip():
             parsed_resp_date = parse_date(str(response_date).strip())
             if parsed_resp_date:
                 logs = [l for l in logs if l.latest_response_at and l.latest_response_at.date() == parsed_resp_date]
 
-        return Response(MessageLogSerializer(logs, many=True).data)
+        serializer_data = MessageLogSerializer(logs, many=True).data
+        if is_paginated:
+            base_count_qs = MessageLog.objects.all()
+            if campaign_id and str(campaign_id).strip().upper() not in ("ALL", "", "NONE"):
+                base_count_qs = base_count_qs.filter(campaign_id=campaign_id)
+            if student_id:
+                base_count_qs = base_count_qs.filter(student_id=student_id)
+            if search and search.strip():
+                base_count_qs = base_count_qs.filter(search_q)
+            if date_param and str(date_param).strip():
+                parsed_d = parse_date(str(date_param).strip())
+                if parsed_d:
+                    base_count_qs = base_count_qs.filter(Q(sent_at__date=parsed_d) | (Q(sent_at__isnull=True) & Q(created_at__date=parsed_d)))
+
+            st_map = {row["status"].upper(): row["count"] for row in base_count_qs.values("status").annotate(count=Count("id")) if row.get("status")}
+            total_items = sum(st_map.values())
+
+            # Accurate response metrics for cards and badges
+            responses_count = base_count_qs.filter(resp_q).count() if (inbound_student_ids or phone_tails) else 0
+
+            unread_msgs = ChatMessage.objects.filter(direction="INBOUND", status__in=["RECEIVED", "UNREAD"])
+            unread_phones = list(unread_msgs.exclude(phone_number__isnull=True).exclude(phone_number="").values_list("phone_number", flat=True).distinct())
+            unread_student_ids = list(unread_msgs.filter(student_id__isnull=False).values_list("student_id", flat=True).distinct())
+            unread_q = Q()
+            if unread_student_ids:
+                unread_q |= Q(student_id__in=unread_student_ids)
+            for tail in {p[-10:] for p in unread_phones if len(p) >= 10}:
+                unread_q |= Q(recipient_number__endswith=tail)
+
+            if unread_q:
+                matching_unread_logs = base_count_qs.filter(unread_q)
+                unread_chats_count = matching_unread_logs.count()
+                if unread_chats_count > 0:
+                    matched_student_ids = set(matching_unread_logs.exclude(student_id__isnull=True).values_list("student_id", flat=True))
+                    matched_phones = set(matching_unread_logs.exclude(recipient_number__isnull=True).exclude(recipient_number="").values_list("recipient_number", flat=True))
+                    matched_tails = {p[-10:] for p in matched_phones if len(p) >= 10}
+
+                    scoped_unread_q = Q()
+                    if matched_student_ids:
+                        scoped_unread_q |= Q(student_id__in=matched_student_ids)
+                    for tail in matched_tails:
+                        scoped_unread_q |= Q(phone_number__endswith=tail)
+
+                    unread_responses_count = unread_msgs.filter(scoped_unread_q).count() if scoped_unread_q else 0
+                else:
+                    unread_responses_count = 0
+            else:
+                unread_chats_count = 0
+                unread_responses_count = 0
+
+            summary_counts = {
+                "total": total_items,
+                "sent": st_map.get("SENT", 0),
+                "delivered": st_map.get("DELIVERED", 0),
+                "read": st_map.get("READ", 0),
+                "failed": st_map.get("FAILED", 0),
+                "queued": st_map.get("QUEUED", 0),
+                "responses": responses_count,
+                "unread_responses": unread_responses_count,
+                "unread_chats": unread_chats_count,
+            }
+
+            return Response({
+                "count": total_count,
+                "total_pages": total_pages,
+                "current_page": page_num,
+                "page_size": p_size,
+                "results": serializer_data,
+                "counts": summary_counts,
+            })
+
+        return Response(serializer_data)
 
 
 class MessageLogDetailView(APIView):
@@ -2283,12 +2485,19 @@ class ComplaintFeedbackListView(APIView):
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
 
-        # Overall summary stats (computed efficiently across current filters or all)
-        total_count = queryset.count()
-        complaints_count = queryset.filter(submission_type="COMPLAINT").count()
-        feedbacks_count = queryset.filter(submission_type="FEEDBACK").count()
-        pending_count = queryset.filter(status="PENDING").count()
-        resolved_count = queryset.filter(status="RESOLVED").count()
+        # Overall summary stats (computed in a single SQL query across remote database)
+        agg_counts = queryset.aggregate(
+            total=Count("id"),
+            complaints=Count("id", filter=Q(submission_type="COMPLAINT")),
+            feedbacks=Count("id", filter=Q(submission_type="FEEDBACK")),
+            pending=Count("id", filter=Q(status="PENDING")),
+            resolved=Count("id", filter=Q(status="RESOLVED")),
+        )
+        total_count = agg_counts["total"] or 0
+        complaints_count = agg_counts["complaints"] or 0
+        feedbacks_count = agg_counts["feedbacks"] or 0
+        pending_count = agg_counts["pending"] or 0
+        resolved_count = agg_counts["resolved"] or 0
 
         # Pagination
         try:
@@ -2408,31 +2617,30 @@ class ComplaintFeedbackDetailView(APIView):
 
 class ComplaintFeedbackStatsView(APIView):
     def get(self, request):
-        total = ComplaintFeedback.objects.count()
-        complaints = ComplaintFeedback.objects.filter(submission_type="COMPLAINT").count()
-        feedbacks = ComplaintFeedback.objects.filter(submission_type="FEEDBACK").count()
-        pending = ComplaintFeedback.objects.filter(status="PENDING").count()
-        in_review = ComplaintFeedback.objects.filter(status="IN_REVIEW").count()
-        resolved = ComplaintFeedback.objects.filter(status="RESOLVED").count()
-
-        # Category breakdowns
-        study = ComplaintFeedback.objects.filter(category="STUDY").count()
-        school = ComplaintFeedback.objects.filter(category="SCHOOL").count()
-        teacher = ComplaintFeedback.objects.filter(category="TEACHER").count()
-        other = ComplaintFeedback.objects.filter(category="OTHER").count()
-
+        counts = ComplaintFeedback.objects.aggregate(
+            total=Count("id"),
+            complaints=Count("id", filter=Q(submission_type="COMPLAINT")),
+            feedbacks=Count("id", filter=Q(submission_type="FEEDBACK")),
+            pending=Count("id", filter=Q(status="PENDING")),
+            in_review=Count("id", filter=Q(status="IN_REVIEW")),
+            resolved=Count("id", filter=Q(status="RESOLVED")),
+            study=Count("id", filter=Q(category="STUDY")),
+            school=Count("id", filter=Q(category="SCHOOL")),
+            teacher=Count("id", filter=Q(category="TEACHER")),
+            other=Count("id", filter=Q(category="OTHER")),
+        )
         return Response({
-            "total": total,
-            "complaints": complaints,
-            "feedbacks": feedbacks,
-            "pending": pending,
-            "in_review": in_review,
-            "resolved": resolved,
+            "total": counts["total"] or 0,
+            "complaints": counts["complaints"] or 0,
+            "feedbacks": counts["feedbacks"] or 0,
+            "pending": counts["pending"] or 0,
+            "in_review": counts["in_review"] or 0,
+            "resolved": counts["resolved"] or 0,
             "categories": {
-                "study": study,
-                "school": school,
-                "teacher": teacher,
-                "other": other,
+                "study": counts["study"] or 0,
+                "school": counts["school"] or 0,
+                "teacher": counts["teacher"] or 0,
+                "other": counts["other"] or 0,
             }
         })
 
@@ -2450,4 +2658,39 @@ class BotUserProfileListView(APIView):
 
         serializer = BotUserProfileSerializer(queryset, many=True)
         return Response(serializer.data)
+
+
+class DashboardStatsView(APIView):
+    def get(self, request):
+        from django.db import connection
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT 
+                        (SELECT COUNT(*) FROM students),
+                        (SELECT COUNT(*) FROM classes),
+                        (SELECT COUNT(*) FROM message_logs WHERE status IN ('SENT', 'DELIVERED', 'READ')),
+                        (SELECT COUNT(*) FROM message_logs WHERE status = 'FAILED')
+                """)
+                total_students, total_classes, messages_sent, messages_failed = cursor.fetchone()
+        except Exception as ex:
+            logger.warning(f"[Dashboard] Combined count query failed, falling back to ORM: {ex}")
+            total_students = Student.objects.count()
+            total_classes = Class.objects.count()
+            messages_sent = MessageLog.objects.filter(status__in=["SENT", "DELIVERED", "READ"]).count()
+            messages_failed = MessageLog.objects.filter(status="FAILED").count()
+
+        recent_campaigns_qs = (
+            MessageCampaign.objects.select_related("school_class", "template")
+            .order_by("-created_at")[:5]
+        )
+        recent_campaigns_data = CampaignSerializer(recent_campaigns_qs, many=True).data
+
+        return Response({
+            "total_students": total_students or 0,
+            "total_classes": total_classes or 0,
+            "messages_sent": messages_sent or 0,
+            "messages_failed": messages_failed or 0,
+            "recent_campaigns": recent_campaigns_data,
+        })
 

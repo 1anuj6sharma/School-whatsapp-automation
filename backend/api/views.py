@@ -2274,8 +2274,6 @@ class ConversationMarkReadView(APIView):
             filter_q, direction="INBOUND", status__in=["RECEIVED", "UNREAD"]
         ).update(status="READ")
 
-        invalidate_conversation_cache()
-
         return Response({"status": "success", "marked_read": updated_cnt})
 
 

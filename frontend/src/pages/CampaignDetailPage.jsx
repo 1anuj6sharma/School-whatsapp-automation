@@ -4,6 +4,7 @@ import { api } from '../services/api';
 import { StatusBadge } from '../components/Badge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { Pagination } from '../components/Pagination';
+import { MetaErrorDetail } from '../components/MetaErrorDetail';
 
 const PAGE_SIZE = 10;
 
@@ -311,7 +312,7 @@ export const CampaignDetailPage = ({
                     </td>
                     <td className="px-6 py-4 text-xs">
                       {log.error_message ? (
-                        <span className="text-rose-600 font-medium">{log.error_message}</span>
+                        <MetaErrorDetail errorMessage={log.error_message} />
                       ) : log.sent_at ? (
                         <span className="text-slate-600">{new Date(log.sent_at).toLocaleTimeString()}</span>
                       ) : (

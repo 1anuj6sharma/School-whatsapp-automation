@@ -15,7 +15,9 @@ import { CampaignsPage } from './pages/CampaignsPage';
 import { CampaignDetailPage } from './pages/CampaignDetailPage';
 import { MessageLogsPage } from './pages/MessageLogsPage';
 import { ComplaintsFeedbackPage } from './pages/ComplaintsFeedbackPage';
+import { ParentInboxPage } from './pages/ParentInboxPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export function App() {
   const [currentUser, setCurrentUser] = useState(() => authStorage.getUser());
@@ -25,9 +27,11 @@ export function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
   const [selectedLogCampaignId, setSelectedLogCampaignId] = useState(null);
+  const [selectedInboxContact, setSelectedInboxContact] = useState(null);
   const [sendWorkflow, setSendWorkflow] = useState('FEES');
   const [sendStudentIds, setSendStudentIds] = useState(null);
   const [sendClassIds, setSendClassIds] = useState(null);
+  const [logsMountKey, setLogsMountKey] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { toasts, addToast, removeToast } = useNotification();
 
@@ -94,7 +98,11 @@ export function App() {
       setActiveTab('campaign-detail');
     } else if (tab === 'logs') {
       setSelectedLogCampaignId(extra || null);
+      setLogsMountKey((k) => k + 1);
       setActiveTab('logs');
+    } else if (tab === 'inbox') {
+      setSelectedInboxContact(extra || null);
+      setActiveTab('inbox');
     } else if (tab === 'send-message') {
       if (typeof extra === 'string') {
         setSendWorkflow(extra);
@@ -119,6 +127,8 @@ export function App() {
     switch (activeTab) {
       case 'dashboard':
         return { title: 'Dashboard Overview', subtitle: 'Real-time overview of school messaging & broadcasts' };
+      case 'inbox':
+        return { title: 'Parent Inbox', subtitle: 'WhatsApp Web 2-way live chat and parent inquiry response hub' };
       case 'send-message':
         return { title: 'Broadcast Messaging', subtitle: 'Send individual Meta WhatsApp messages to whole classes' };
       case 'complaints-feedback':
@@ -173,6 +183,9 @@ export function App() {
         activeTab={activeTab === 'campaign-detail' ? 'campaigns' : activeTab}
         setActiveTab={(tab) => {
           setSelectedCampaignId(null);
+          if (tab === 'logs') {
+            setLogsMountKey((k) => k + 1);
+          }
           setActiveTab(tab);
         }}
         isOpen={mobileMenuOpen}
@@ -193,63 +206,71 @@ export function App() {
         />
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
-          {activeTab === 'dashboard' && <DashboardPage onNavigate={handleNavigate} />}
-          {activeTab === 'send-message' && (
-            <SendMessagePage
-              key={`${sendWorkflow}-${(sendStudentIds || []).join(',')}-${(sendClassIds || []).join(',')}`}
-              initialWorkflow={sendWorkflow}
-              initialStudentIds={sendStudentIds}
-              initialClassIds={sendClassIds}
-              onNavigateToCampaign={(id) => handleNavigate('campaign-detail', id)}
-              showToast={addToast}
-            />
-          )}
-          {activeTab === 'complaints-feedback' && (
-            <ComplaintsFeedbackPage
-              showToast={addToast}
-            />
-          )}
-          {activeTab === 'students' && (
-            <StudentsPage
-              onNavigateToSendMessage={(navData) => handleNavigate('send-message', navData)}
-              showToast={addToast}
-            />
-          )}
-          {activeTab === 'classes' && (
-            <ClassesPage
-              onNavigateToSendMessage={() => setActiveTab('send-message')}
-              showToast={addToast}
-            />
-          )}
-          {activeTab === 'templates' && (
-            <TemplatesPage
-              onNavigateToSend={() => setActiveTab('send-message')}
-              showToast={addToast}
-            />
-          )}
-          {activeTab === 'campaigns' && (
-            <CampaignsPage
-              onNavigateToDetail={(id) => handleNavigate('campaign-detail', id)}
-              onNavigateToSend={() => setActiveTab('send-message')}
-              onNavigateToLogsWithCampaign={(id) => handleNavigate('logs', id)}
-              showToast={addToast}
-            />
-          )}
-          {activeTab === 'campaign-detail' && selectedCampaignId && (
-            <CampaignDetailPage
-              campaignId={selectedCampaignId}
-              onBack={() => setActiveTab('campaigns')}
-              showToast={addToast}
-            />
-          )}
-          {activeTab === 'logs' && (
-            <MessageLogsPage
-              key={selectedLogCampaignId || 'all-logs'}
-              initialCampaignId={selectedLogCampaignId}
-              showToast={addToast}
-            />
-          )}
-          {activeTab === 'settings' && <SettingsPage showToast={addToast} />}
+          <ErrorBoundary key={activeTab}>
+            {activeTab === 'dashboard' && <DashboardPage onNavigate={handleNavigate} />}
+            {activeTab === 'inbox' && (
+              <ParentInboxPage
+                initialContact={selectedInboxContact}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'send-message' && (
+              <SendMessagePage
+                key={`${sendWorkflow}-${(sendStudentIds || []).join(',')}-${(sendClassIds || []).join(',')}`}
+                initialWorkflow={sendWorkflow}
+                initialStudentIds={sendStudentIds}
+                initialClassIds={sendClassIds}
+                onNavigateToCampaign={(id) => handleNavigate('campaign-detail', id)}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'complaints-feedback' && (
+              <ComplaintsFeedbackPage
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'students' && (
+              <StudentsPage
+                onNavigateToSendMessage={(navData) => handleNavigate('send-message', navData)}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'classes' && (
+              <ClassesPage
+                onNavigateToSendMessage={() => setActiveTab('send-message')}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'templates' && (
+              <TemplatesPage
+                onNavigateToSend={() => setActiveTab('send-message')}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'campaigns' && (
+              <CampaignsPage
+                onNavigateToDetail={(id) => handleNavigate('campaign-detail', id)}
+                onNavigateToSend={() => setActiveTab('send-message')}
+                onNavigateToLogsWithCampaign={(id) => handleNavigate('logs', id)}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'campaign-detail' && selectedCampaignId && (
+              <CampaignDetailPage
+                campaignId={selectedCampaignId}
+                onBack={() => setActiveTab('campaigns')}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'logs' && (
+              <MessageLogsPage
+                key={`logs-${selectedLogCampaignId || 'all'}-${logsMountKey}`}
+                initialCampaignId={selectedLogCampaignId}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'settings' && <SettingsPage showToast={addToast} />}
+          </ErrorBoundary>
         </main>
       </div>
 

@@ -347,8 +347,9 @@ export const api = {
     if (params?.page) url.searchParams.append('page', params.page.toString());
     if (params?.page_size) url.searchParams.append('page_size', params.page_size.toString());
     if (params?.limit) url.searchParams.append('limit', params.limit.toString());
+    url.searchParams.append('_t', Date.now().toString());
 
-    const res = await fetch(url.pathname + url.search);
+    const res = await fetch(url.pathname + url.search, { cache: 'no-store' });
     return handleResponse(res);
   },
 
@@ -410,6 +411,16 @@ export const api = {
   },
 
   // WhatsApp Conversations
+  async getConversations(params = {}) {
+    const url = new URL(`${window.location.origin}/api/conversations`);
+    if (params.search) url.searchParams.append('search', params.search);
+    if (params.unread_only) url.searchParams.append('unread_only', 'true');
+    if (params.replies_only) url.searchParams.append('replies_only', 'true');
+    if (params.class_id) url.searchParams.append('class_id', params.class_id.toString());
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
   async getConversation(phoneOrStudentId) {
     const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(phoneOrStudentId)}`);
     return handleResponse(res);

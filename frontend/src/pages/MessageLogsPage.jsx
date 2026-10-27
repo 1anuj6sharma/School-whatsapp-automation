@@ -28,6 +28,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ConversationDrawer } from '../components/ConversationDrawer';
 import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
+import { MetaErrorDetail } from '../components/MetaErrorDetail';
 
 const PAGE_SIZE = 10;
 
@@ -1105,13 +1106,7 @@ export const MessageLogsPage = ({ showToast, initialCampaignId = null }) => {
                           : new Date(log.created_at).toLocaleString()}
                       </td>
                       <td className="px-4 py-4 text-xs">
-                        {log.error_message ? (
-                          <span className="text-rose-600 font-medium block max-w-xs truncate" title={log.error_message}>
-                            {log.error_message}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400">-</span>
-                        )}
+                        <MetaErrorDetail errorMessage={log.error_message} />
                       </td>
                       <td className="px-4 py-4 text-center">
                         <div className="inline-flex items-center gap-1.5">

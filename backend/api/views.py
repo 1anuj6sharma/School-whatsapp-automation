@@ -1619,6 +1619,48 @@ class TestMessageView(APIView):
         })
 
 
+def humanize_meta_error(err_code=None, err_title="", err_msg="", err_details=""):
+    code_str = str(err_code).strip() if err_code else ""
+    friendly_map = {
+        "131026": "Number not on WhatsApp (or recipient opted out)",
+        "131047": "24-Hour window expired (requires approved template)",
+        "131051": "Unsupported message type",
+        "131052": "Media download failed",
+        "131053": "Media upload failed",
+        "130429": "Rate limit reached (Meta temporary speed limit)",
+        "131048": "Rate limit reached (Meta temporary speed limit)",
+        "80007": "Meta rate limit reached",
+        "131009": "Invalid template variable or parameter value",
+        "132000": "Template not found or language mismatch in Meta account",
+        "132001": "Template paused or rejected by Meta",
+        "132005": "Template parameter count mismatch",
+        "132015": "Template parameter count mismatch",
+        "133004": "WhatsApp Business account suspended or restricted",
+        "133010": "Phone number not registered with WhatsApp Business",
+        "131031": "Meta Business payment method issue or credit limit reached",
+        "190": "Meta Access Token expired",
+        "100": "Invalid parameter sent to Meta API",
+        "130472": "Recipient number in restricted region",
+    }
+    simple_reason = friendly_map.get(code_str)
+    if not simple_reason:
+        low = f"{err_title} {err_msg} {err_details}".lower()
+        if "undeliverable" in low or "not a whatsapp" in low:
+            simple_reason = "Number not on WhatsApp (or recipient opted out)"
+        elif "24 hour" in low or "re-engagement" in low:
+            simple_reason = "24-Hour window expired (requires approved template)"
+        elif "rate limit" in low:
+            simple_reason = "Rate limit reached (Meta temporary speed limit)"
+        else:
+            simple_reason = err_title or err_msg or "Delivery failed"
+
+    tech_part = f"Meta error [{code_str}]: {err_title} - {err_msg}" if code_str else f"Meta error: {err_title} - {err_msg}"
+    if err_details:
+        tech_part += f" ({err_details})"
+
+    return f"{simple_reason} • {tech_part}"
+
+
 class WhatsAppWebhookView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -1670,18 +1712,14 @@ class WhatsAppWebhookView(APIView):
 
                         if new_status == "FAILED":
                             errors = status_item.get("errors", [])
-                            err_str = "Unknown Meta error"
+                            err_str = "Delivery failed"
                             if errors:
                                 first_err = errors[0]
                                 err_code = first_err.get("code", "")
                                 err_title = first_err.get("title", "")
                                 err_msg = first_err.get("message", "")
                                 err_details = first_err.get("error_data", {}).get("details", "")
-                                err_str = f"Meta error: {err_title} - {err_msg}"
-                                if err_code:
-                                    err_str = f"Meta error [{err_code}]: {err_title} - {err_msg}"
-                                if err_details:
-                                    err_str += f" ({err_details})"
+                                err_str = humanize_meta_error(err_code, err_title, err_msg, err_details)
                             logger.error(
                                 f"[Webhook] DELIVERY FAILED for message ID '{message_id}' (Recipient: {recipient_info}): {err_str}"
                             )
@@ -1870,6 +1908,134 @@ class WhatsAppWebhookView(APIView):
             logger.error(f"[Webhook] Unexpected error in webhook handler: {webhook_err}", exc_info=True)
             # CRITICAL: Always return HTTP 200 OK to Meta so Meta never retries in a loop
             return Response({"status": "error_handled"}, status=200)
+
+
+class ConversationListView(APIView):
+    def get(self, request):
+        search = (request.query_params.get("search") or "").strip().lower()
+        unread_only = request.query_params.get("unread_only", "").lower() in ("true", "1")
+        replies_only = request.query_params.get("replies_only", "").lower() in ("true", "1")
+        class_id = request.query_params.get("class_id")
+
+        from django.db import connection
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    WITH ranked_messages AS (
+                        SELECT 
+                            cm.phone_number,
+                            cm.direction,
+                            cm.message_type,
+                            cm.text_content,
+                            cm.template_name,
+                            cm.status,
+                            cm.created_at,
+                            ROW_NUMBER() OVER(PARTITION BY cm.phone_number ORDER BY cm.created_at DESC, cm.id DESC) as rn
+                        FROM chat_messages cm
+                        WHERE cm.phone_number IS NOT NULL AND cm.phone_number != ''
+                    ),
+                    phone_agg AS (
+                        SELECT 
+                            cm.phone_number,
+                            COUNT(*) as total_msgs,
+                            COUNT(*) FILTER (WHERE cm.direction = 'INBOUND' AND cm.status IN ('RECEIVED', 'UNREAD')) as unread_count,
+                            COUNT(*) FILTER (WHERE cm.direction = 'INBOUND') as inbound_count
+                        FROM chat_messages cm
+                        WHERE cm.phone_number IS NOT NULL AND cm.phone_number != ''
+                        GROUP BY cm.phone_number
+                    ),
+                    student_group AS (
+                        SELECT 
+                            RIGHT(st.whatsapp_number, 10) as phone_tail,
+                            json_agg(json_build_object(
+                                'id', st.id,
+                                'student_name', st.student_name,
+                                'parent_name', st.parent_name,
+                                'fees_due', st.fees_due,
+                                'class_id', st.class_id,
+                                'class_name', CONCAT(cl.name, CASE WHEN cl.section IS NOT NULL AND cl.section != '' THEN CONCAT(' - ', cl.section) ELSE '' END)
+                            )) as students_json
+                        FROM students st
+                        LEFT JOIN classes cl ON cl.id = st.class_id
+                        WHERE st.whatsapp_number IS NOT NULL AND st.whatsapp_number != ''
+                        GROUP BY RIGHT(st.whatsapp_number, 10)
+                    )
+                    SELECT 
+                        rm.phone_number,
+                        rm.direction,
+                        rm.message_type,
+                        rm.text_content,
+                        rm.template_name,
+                        rm.status,
+                        rm.created_at,
+                        pa.total_msgs,
+                        pa.unread_count,
+                        pa.inbound_count,
+                        sg.students_json
+                    FROM ranked_messages rm
+                    JOIN phone_agg pa ON pa.phone_number = rm.phone_number
+                    LEFT JOIN student_group sg ON sg.phone_tail = RIGHT(rm.phone_number, 10)
+                    WHERE rm.rn = 1
+                    ORDER BY rm.created_at DESC
+                    LIMIT 1000
+                """)
+                raw_rows = cursor.fetchall()
+
+            conversations = []
+            for row in raw_rows:
+                phone, direction, m_type, text, template, st_status, created_at, total_msgs, unread_cnt, inbound_cnt, students_json = row
+
+                st_list = students_json if isinstance(students_json, list) else []
+                primary_student = st_list[0] if st_list else None
+
+                snippet = text or (f"Template: {template}" if template else f"[{m_type or 'Message'}]")
+                if len(snippet) > 85:
+                    snippet = snippet[:82] + "..."
+
+                conv_item = {
+                    "phone_number": phone,
+                    "student_id": primary_student["id"] if primary_student else None,
+                    "student_name": primary_student["student_name"] if primary_student else "WhatsApp Contact",
+                    "parent_name": primary_student["parent_name"] if primary_student else "",
+                    "class_name": primary_student["class_name"] if primary_student else "Direct Contact",
+                    "class_id": primary_student["class_id"] if primary_student else None,
+                    "fees_due": str(primary_student["fees_due"]) if (primary_student and primary_student.get("fees_due") is not None) else None,
+                    "students": st_list,
+                    "latest_message": snippet,
+                    "latest_message_direction": direction,
+                    "latest_message_time": created_at,
+                    "latest_message_status": st_status,
+                    "total_messages": total_msgs or 0,
+                    "unread_count": unread_cnt or 0,
+                    "has_inbound": (inbound_cnt or 0) > 0,
+                }
+
+                if unread_only and conv_item["unread_count"] <= 0:
+                    continue
+                if replies_only and not conv_item["has_inbound"]:
+                    continue
+                if class_id and str(conv_item.get("class_id")) != str(class_id):
+                    continue
+                if search:
+                    match_phone = search in phone.lower()
+                    match_sname = search in conv_item["student_name"].lower()
+                    match_pname = search in (conv_item["parent_name"] or "").lower()
+                    match_msg = search in (text or "").lower()
+                    if not (match_phone or match_sname or match_pname or match_msg):
+                        continue
+
+                conversations.append(conv_item)
+
+            total_unread = sum(1 for c in conversations if c["unread_count"] > 0)
+
+            return Response({
+                "count": len(conversations),
+                "unread_conversations": total_unread,
+                "conversations": conversations,
+            })
+        except Exception as ex:
+            logger.error(f"[ConversationListView] Error: {ex}", exc_info=True)
+            return Response({"count": 0, "unread_conversations": 0, "conversations": []})
 
 
 class ConversationDetailView(APIView):

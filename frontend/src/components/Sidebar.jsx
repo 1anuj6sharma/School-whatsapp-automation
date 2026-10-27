@@ -26,6 +26,7 @@ export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose, currentUser,
     { id: 'classes', label: 'Classes', icon: GraduationCap },
     { id: 'templates', label: 'Templates', icon: FileCode },
     { id: 'campaigns', label: 'Campaigns', icon: Layers },
+    { id: 'inbox', label: 'Parent Inbox', icon: MessageSquareShare, highlight: false },
     { id: 'logs', label: 'Message Logs', icon: ScrollText },
     { id: 'settings', label: 'Settings & Test', icon: Settings },
   ];

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   Search,
   MessageCircle,
@@ -58,6 +58,7 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
   const [newMessagesBelow, setNewMessagesBelow] = useState(0);
   const prevMessagesCountRef = useRef(0);
 
@@ -139,27 +140,33 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
 
     try {
       const identifier = studentId || phone;
-      const data = await api.getConversation(identifier);
+      // If user is at bottom, mark as read; if user is scrolled up, keep unread
+      const shouldMark = isAtBottomRef.current;
+      const data = await api.getConversation(identifier, { mark_read: shouldMark });
       setConversationData(data);
 
-      // Update unread count in local list
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.phone_number === phone || (studentId && c.student_id === studentId)) {
-            return { ...c, unread_count: 0 };
-          }
-          return c;
-        })
-      );
+      if (shouldMark) {
+        // Update unread count in local list
+        setConversations((prev) =>
+          prev.map((c) => {
+            if (c.phone_number === phone || (studentId && c.student_id === studentId)) {
+              return { ...c, unread_count: 0 };
+            }
+            return c;
+          })
+        );
+      }
     } catch (err) {
-      console.error('Error loading chat:', err);
-      showToast?.({
-        type: 'error',
-        title: 'Chat Load Error',
-        message: err.message || 'Could not load messages for this parent.',
-      });
+      if (!isSilent) {
+        console.error('Error loading chat:', err);
+        showToast?.({
+          type: 'error',
+          title: 'Chat Load Error',
+          message: err.message || 'Could not load messages for this parent.',
+        });
+      }
     } finally {
-      setLoadingChat(false);
+      if (!isSilent) setLoadingChat(false);
     }
   }, [showToast]);
 
@@ -168,6 +175,21 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
       fetchActiveChat(activePhone, activeStudentId);
     }
   }, [activePhone, activeStudentId, fetchActiveChat]);
+
+  // Auto-poll conversation updates every 3.5 seconds so incoming messages auto-reflect!
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // 1. Silently refresh conversation list so new unread messages auto-reflect across all parents
+      fetchConversations(true);
+
+      // 2. Silently refresh active conversation if selected
+      if (activePhone || activeStudentId) {
+        fetchActiveChat(activePhone, activeStudentId, true);
+      }
+    }, 3500);
+
+    return () => clearInterval(interval);
+  }, [activePhone, activeStudentId, fetchConversations, fetchActiveChat]);
 
   // Mark all unread inbound messages as READ when seen in current context
   const markActiveMessagesAsRead = useCallback(() => {
@@ -209,6 +231,7 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
     } else if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
+    isAtBottomRef.current = true;
     setIsAtBottom(true);
     setNewMessagesBelow(0);
     markActiveMessagesAsRead();
@@ -220,6 +243,7 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
     if (!el) return;
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     const atBottom = distanceToBottom < 80;
+    isAtBottomRef.current = atBottom;
     setIsAtBottom(atBottom);
     if (atBottom) {
       setNewMessagesBelow(0);
@@ -235,19 +259,30 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
       const currentCount = msgs.length;
       prevMessagesCountRef.current = currentCount;
 
-      if (isAtBottom) {
+      if (isAtBottomRef.current) {
         scrollToBottom('smooth');
       } else if (currentCount > prevCount) {
         setNewMessagesBelow((prev) => prev + (currentCount - prevCount));
       }
     }
-  }, [conversationData?.messages, loadingChat, isAtBottom, scrollToBottom]);
+  }, [conversationData?.messages, loadingChat, scrollToBottom]);
+
+  // Calculate unread count waiting below for the floating arrow button
+  const unreadCountBelow = useMemo(() => {
+    if (isAtBottom) return 0;
+    const msgs = conversationData?.messages || [];
+    const unreadInbound = msgs.filter(
+      (m) => m.direction === 'INBOUND' && (m.status === 'RECEIVED' || m.status === 'UNREAD')
+    ).length;
+    return Math.max(unreadInbound, newMessagesBelow);
+  }, [isAtBottom, conversationData?.messages, newMessagesBelow]);
 
   // Handle Select Conversation
   const handleSelectConversation = (conv) => {
     setActivePhone(conv.phone_number);
     setActiveStudentId(conv.student_id);
     setMobileView('CHAT');
+    isAtBottomRef.current = true;
     setIsAtBottom(true);
     setNewMessagesBelow(0);
     prevMessagesCountRef.current = 0;
@@ -800,9 +835,9 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
                     aria-label="Scroll to bottom"
                   >
                     <ChevronDown className="w-5 h-5 text-slate-200 group-hover:translate-y-0.5 transition-transform" />
-                    {newMessagesBelow > 0 && (
+                    {unreadCountBelow > 0 && (
                       <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center shadow-md animate-pulse">
-                        {newMessagesBelow > 99 ? '99+' : newMessagesBelow}
+                        {unreadCountBelow > 99 ? '99+' : unreadCountBelow}
                       </span>
                     )}
                   </button>

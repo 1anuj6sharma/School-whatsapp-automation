@@ -421,8 +421,12 @@ export const api = {
     return handleResponse(res);
   },
 
-  async getConversation(phoneOrStudentId) {
-    const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(phoneOrStudentId)}`);
+  async getConversation(phoneOrStudentId, params = {}) {
+    const url = new URL(`${window.location.origin}/api/conversations/${encodeURIComponent(phoneOrStudentId)}`);
+    if (params.mark_read !== undefined) {
+      url.searchParams.append('mark_read', params.mark_read ? 'true' : 'false');
+    }
+    const res = await fetch(url.pathname + url.search);
     return handleResponse(res);
   },
 

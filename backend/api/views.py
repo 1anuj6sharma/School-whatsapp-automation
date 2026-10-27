@@ -2084,8 +2084,11 @@ class ConversationDetailView(APIView):
             .order_by("created_at")
         )
 
-        # Mark unread inbound messages as READ when viewed by admin
-        ChatMessage.objects.filter(filter_q, direction="INBOUND", status="RECEIVED").update(status="READ")
+        # Mark unread inbound messages as READ when viewed by admin (unless mark_read=false is specified)
+        mark_read_param = request.query_params.get("mark_read")
+        should_mark_read = mark_read_param is None or mark_read_param.lower() in ("true", "1")
+        if should_mark_read:
+            ChatMessage.objects.filter(filter_q, direction="INBOUND", status__in=["RECEIVED", "UNREAD"]).update(status="READ")
 
         # Deduplicate any duplicate ChatMessage records in DB
         seen_keys = set()

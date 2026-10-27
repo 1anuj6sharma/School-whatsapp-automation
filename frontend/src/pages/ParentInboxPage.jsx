@@ -23,6 +23,11 @@ import {
   Sliders,
   ChevronDown,
   Sparkles,
+  Paperclip,
+  Image as ImageIcon,
+  FileText,
+  Download,
+  ZoomIn,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -57,10 +62,18 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
 
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const fileInputRef = useRef(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const isAtBottomRef = useRef(true);
   const [newMessagesBelow, setNewMessagesBelow] = useState(0);
   const prevMessagesCountRef = useRef(0);
+
+  // File Attachment State (Images & PDFs)
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [filePreview, setFilePreview] = useState(null);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [previewImageModal, setPreviewImageModal] = useState(null);
+  const [previewPdfModal, setPreviewPdfModal] = useState(null);
 
   // Load classes for filter dropdown
   useEffect(() => {
@@ -288,32 +301,102 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
     prevMessagesCountRef.current = 0;
   };
 
-  // Send Direct Message
+  // Handle File Selection (Photo or PDF)
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 25 * 1024 * 1024) {
+      showToast?.({
+        type: 'error',
+        title: 'File Too Large',
+        message: 'File size must be under 25MB for WhatsApp.',
+      });
+      return;
+    }
+
+    setSelectedFile(file);
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setFilePreview({
+          type: 'image',
+          url: event.target.result,
+          name: file.name,
+          size: file.size,
+        });
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setFilePreview({
+        type: 'pdf',
+        name: file.name,
+        size: file.size,
+      });
+    }
+  };
+
+  const handleClearFile = () => {
+    setSelectedFile(null);
+    setFilePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  // Send Direct Message (Text or Media Attachment)
   const handleSendMessage = async (e) => {
     e?.preventDefault();
-    if (!replyText.trim() || sending) return;
+    const textToSend = replyText.trim();
+    if ((!textToSend && !selectedFile) || sending || uploadingMedia) return;
 
     setSending(true);
-    const textToSend = replyText.trim();
-    setReplyText('');
 
     try {
+      let uploadedMediaUrl = null;
+      let detectedMediaType = null;
+      let uploadedFilename = null;
+
+      if (selectedFile) {
+        setUploadingMedia(true);
+        try {
+          const uploadRes = await api.uploadMedia(selectedFile);
+          uploadedMediaUrl = uploadRes.relative_url || uploadRes.url;
+          uploadedFilename = selectedFile.name;
+          const isPdf = selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf');
+          detectedMediaType = uploadRes.file_type || (isPdf ? 'document' : 'image');
+        } catch (uploadErr) {
+          throw new Error(`Media upload failed: ${uploadErr.message || 'Could not upload attachment'}`);
+        } finally {
+          setUploadingMedia(false);
+        }
+      }
+
       const payload = {
         phone_number: activePhone,
         student_id: activeStudentId,
         message: textToSend,
       };
 
+      if (uploadedMediaUrl) {
+        payload.media_url = uploadedMediaUrl;
+        payload.media_type = detectedMediaType;
+        payload.filename = uploadedFilename;
+      }
+
       await api.sendConversationMessage(payload);
+      setReplyText('');
+      handleClearFile();
       showToast?.({
         type: 'success',
-        title: 'Message Sent',
-        message: 'Message delivered to parent via WhatsApp.',
+        title: selectedFile ? 'Attachment Sent' : 'Message Sent',
+        message: selectedFile ? 'Photo/document sent successfully.' : 'Message delivered to parent via WhatsApp.',
       });
 
       // Reload chat messages and list
       await fetchActiveChat(activePhone, activeStudentId, true);
       fetchConversations(true);
+      setTimeout(() => scrollToBottom('smooth'), 120);
     } catch (err) {
       console.error('Failed to send message:', err);
       showToast?.({
@@ -321,9 +404,9 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
         title: 'Send Failed',
         message: err.message || 'Could not send WhatsApp message.',
       });
-      setReplyText(textToSend); // Restore unsent message
     } finally {
       setSending(false);
+      setUploadingMedia(false);
     }
   };
 
@@ -780,28 +863,97 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
                               </div>
                             )}
 
-                            {/* Media Header (if attached) */}
-                            {msg.media_url && (
-                              <div className="mb-2 rounded-xl overflow-hidden border border-slate-200/80 bg-black/5">
-                                {msg.media_url.endsWith('.pdf') ? (
-                                  <a
-                                    href={msg.media_url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="p-3 flex items-center gap-2 text-xs font-semibold text-emerald-700 hover:underline"
+                            {/* Media Header (Photo / PDF Document) */}
+                            {(() => {
+                              const effectiveMediaUrl = msg.media_url || (
+                                msg.message_type === 'image' && msg.raw_payload?.image?.id
+                                  ? `/api/media/whatsapp/${msg.raw_payload.image.id}`
+                                  : (msg.raw_payload?.document?.id ? `/api/media/whatsapp/${msg.raw_payload.document.id}` : null)
+                              );
+                              if (!effectiveMediaUrl) return null;
+
+                              const fullUrl = effectiveMediaUrl.startsWith('http') || effectiveMediaUrl.startsWith('data:')
+                                ? effectiveMediaUrl
+                                : `${window.location.origin}${effectiveMediaUrl.startsWith('/') ? '' : '/'}${effectiveMediaUrl}`;
+                              const isPdf = effectiveMediaUrl.toLowerCase().endsWith('.pdf') || 
+                                msg.message_type === 'document' || 
+                                Boolean(msg.raw_payload?.document) ||
+                                (msg.text_content && msg.text_content.toLowerCase().includes('document'));
+
+                              if (isPdf) {
+                                const docName = msg.raw_payload?.document?.filename || 
+                                  (msg.text_content?.startsWith('📄 Document: ') ? msg.text_content.replace('📄 Document: ', '') : null) ||
+                                  (effectiveMediaUrl.endsWith('.pdf') ? effectiveMediaUrl.split('/').pop().replace(/^[a-f0-9]+_/, '') : null) || 
+                                  'Document.pdf';
+                                return (
+                                  <div
+                                    className={`mb-2 p-2.5 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 transition-all shadow-xs ${
+                                      isOutbound
+                                        ? 'bg-emerald-200/60 border-emerald-300 text-emerald-950'
+                                        : 'bg-slate-50 border-slate-200/90 text-slate-800'
+                                    }`}
                                   >
-                                    <span>View Attached PDF Document</span>
-                                    <ExternalLink className="w-3.5 h-3.5" />
-                                  </a>
-                                ) : (
+                                    <div 
+                                      onClick={() => setPreviewPdfModal({ url: fullUrl, name: docName })}
+                                      className="flex items-center gap-2.5 min-w-0 cursor-pointer flex-1"
+                                      title="Click to view PDF"
+                                    >
+                                      <div className={`p-2 rounded-xl shrink-0 shadow-xs ${isOutbound ? 'bg-emerald-300/80 text-emerald-900' : 'bg-rose-100 text-rose-600'}`}>
+                                        <FileText className="w-5 h-5" />
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-bold truncate max-w-[150px] sm:max-w-[200px]" title={docName}>
+                                          {docName}
+                                        </p>
+                                        <p className="text-[10px] text-slate-500">
+                                          PDF Document &bull; WhatsApp Attachment
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => setPreviewPdfModal({ url: fullUrl, name: docName })}
+                                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95 shadow-2xs"
+                                        title="View PDF directly in chat"
+                                      >
+                                        <ZoomIn className="w-3.5 h-3.5" />
+                                        <span>View</span>
+                                      </button>
+                                      <a
+                                        href={fullUrl}
+                                        download={docName}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="p-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer bg-slate-200 hover:bg-slate-300 text-slate-700"
+                                        title="Download or open PDF file"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                      </a>
+                                    </div>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div className="relative group/img mb-2 overflow-hidden rounded-xl border border-black/10 shadow-xs bg-slate-900/5">
                                   <img
-                                    src={msg.media_url}
-                                    alt="WhatsApp attachment"
-                                    className="w-full max-h-48 object-cover rounded-lg"
+                                    src={fullUrl}
+                                    alt="WhatsApp photo attachment"
+                                    className="w-full max-h-64 object-cover rounded-xl transition-all duration-300 group-hover/img:scale-[1.02] cursor-pointer"
+                                    onClick={() => setPreviewImageModal({ url: fullUrl, name: msg.sender_name || activeStudent?.parent_name || 'Parent Photo' })}
+                                    loading="lazy"
                                   />
-                                )}
-                              </div>
-                            )}
+                                  <div
+                                    onClick={() => setPreviewImageModal({ url: fullUrl, name: msg.sender_name || activeStudent?.parent_name || 'Parent Photo' })}
+                                    className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-2 cursor-pointer text-white text-xs font-semibold backdrop-blur-2xs"
+                                  >
+                                    <ZoomIn className="w-4 h-4" />
+                                    <span>Click to View Photo</span>
+                                  </div>
+                                </div>
+                              );
+                            })()}
 
                             {/* Message Body */}
                             <p className="whitespace-pre-wrap leading-relaxed text-xs sm:text-[13px]">
@@ -874,11 +1026,66 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
                   </button>
                 </div>
 
+                {/* Attachment Preview Strip */}
+                {filePreview && (
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2 animate-fade-in">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {filePreview.type === 'image' && filePreview.url ? (
+                        <img
+                          src={filePreview.url}
+                          alt="Preview"
+                          className="w-10 h-10 object-cover rounded-lg border border-slate-200 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shrink-0">
+                          <FileText className="w-5 h-5" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-800 truncate max-w-[200px]" title={filePreview.name}>
+                          {filePreview.name}
+                        </p>
+                        <p className="text-[10px] text-slate-400">
+                          {filePreview.type === 'pdf' ? 'PDF Document' : 'Image'} &bull; {(filePreview.size / 1024).toFixed(0)} KB
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleClearFile}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                      title="Remove attachment"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Input Form */}
                 <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+                  {/* Hidden File Input */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    accept="image/*,application/pdf"
+                    onChange={handleFileSelect}
+                  />
+
+                  {/* Attachment Button */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={sending || uploadingMedia}
+                    className="p-2.5 sm:p-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-emerald-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all border border-slate-200 shrink-0 flex items-center justify-center cursor-pointer"
+                    title="Attach Photo or PDF Document"
+                  >
+                    <Paperclip className="w-4 h-4" />
+                  </button>
+
                   <textarea
                     rows={1}
-                    placeholder="Type a message to parent... (Press Enter to send)"
+                    placeholder={selectedFile ? `Add an optional caption for ${selectedFile.name}... (Press Enter to send)` : 'Type a message to parent... (Press Enter to send)'}
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
                     onKeyDown={(e) => {
@@ -887,15 +1094,17 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
                         handleSendMessage();
                       }
                     }}
+                    disabled={sending || uploadingMedia}
                     className="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-hidden transition-all resize-none max-h-24"
                   />
 
                   <button
                     type="submit"
-                    disabled={!replyText.trim() || sending}
-                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold rounded-xl text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 shrink-0"
+                    disabled={(!replyText.trim() && !selectedFile) || sending || uploadingMedia}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold rounded-xl text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                    title={selectedFile ? 'Send WhatsApp Attachment' : 'Send WhatsApp Message'}
                   >
-                    {sending ? (
+                    {sending || uploadingMedia ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
                       <>
@@ -971,6 +1180,128 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
               >
                 Cancel
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Enlarged Photo Preview Lightbox Modal */}
+      {previewImageModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setPreviewImageModal(null)}
+        >
+          <div
+            className="relative max-w-3xl max-h-[90vh] w-full bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700 text-white shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <ImageIcon className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="text-xs font-bold truncate">{previewImageModal.name || 'Parent Photo Attachment'}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={previewImageModal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Open in new window"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open</span>
+                </a>
+                <a
+                  href={previewImageModal.url}
+                  download="whatsapp_photo.jpg"
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Download image file"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewImageModal(null)}
+                  className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-3 flex items-center justify-center overflow-auto max-h-[calc(90vh-65px)] bg-black/40">
+              <img
+                src={previewImageModal.url}
+                alt="Parent Photo Preview"
+                className="max-h-[78vh] max-w-full object-contain rounded-lg shadow-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive PDF Preview Modal */}
+      {previewPdfModal && (
+        <div
+          className="fixed inset-0 z-60 bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-fade-in"
+          onClick={() => setPreviewPdfModal(null)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[92vh] w-full bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700 text-white shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-1.5 rounded-lg bg-rose-500/20 text-rose-400">
+                  <FileText className="w-4 h-4 shrink-0" />
+                </div>
+                <div className="min-w-0">
+                  <span className="text-xs font-bold truncate block max-w-xs sm:max-w-md">
+                    {previewPdfModal.name || 'PDF Document'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    PDF Document Viewer
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={previewPdfModal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Open in new window"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Open in Tab</span>
+                </a>
+                <a
+                  href={previewPdfModal.url}
+                  download={previewPdfModal.name || 'document.pdf'}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Download PDF"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewPdfModal(null)}
+                  className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Embedded PDF Viewer */}
+            <div className="w-full h-[76vh] bg-slate-100 flex flex-col">
+              <iframe
+                src={previewPdfModal.url}
+                title={previewPdfModal.name || 'PDF Document Preview'}
+                className="w-full h-full border-0 bg-white"
+              />
             </div>
           </div>
         </div>

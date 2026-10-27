@@ -194,7 +194,7 @@ class TemplateUpdateMetaSerializer(serializers.Serializer):
 
 
 class MessageLogSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source="student.student_name", read_only=True, default=None)
+    student_name = serializers.SerializerMethodField()
     class_name = serializers.SerializerMethodField()
     section = serializers.SerializerMethodField()
     class_section = serializers.SerializerMethodField()
@@ -204,7 +204,16 @@ class MessageLogSerializer(serializers.ModelSerializer):
     latest_response_at = serializers.DateTimeField(read_only=True, default=None)
     latest_response_text = serializers.CharField(read_only=True, default=None)
 
+    def get_student_name(self, obj):
+        if getattr(obj, "student_name", None):
+            return obj.student_name
+        if obj.student and obj.student.student_name:
+            return obj.student.student_name
+        return None
+
     def get_class_name(self, obj):
+        if getattr(obj, "class_name", None):
+            return obj.class_name
         if obj.student and obj.student.school_class:
             return obj.student.school_class.name
         if obj.campaign and obj.campaign.school_class:
@@ -212,6 +221,8 @@ class MessageLogSerializer(serializers.ModelSerializer):
         return None
 
     def get_section(self, obj):
+        if getattr(obj, "section", None):
+            return obj.section
         if obj.student and obj.student.school_class:
             return obj.student.school_class.section
         if obj.campaign and obj.campaign.school_class:

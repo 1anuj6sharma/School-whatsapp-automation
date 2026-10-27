@@ -369,25 +369,40 @@ class StudentImportCSVView(APIView):
             matching_students = list(Student.objects.filter(whatsapp_number__in=phone_variants))
 
             existing_student = None
+            norm_name = name_val.strip().lower() if name_val else ""
+
             if matching_students:
-                # 1. Match by class if target_class is specified
-                if target_class:
+                # 1. Match if BOTH target_class (if known) and student_name match
+                if target_class and norm_name:
+                    existing_student = next(
+                        (s for s in matching_students if s.school_class_id == target_class.id and s.student_name.strip().lower() == norm_name),
+                        None
+                    )
+
+                # 2. Match by exact student name among students with this phone number
+                if not existing_student and norm_name:
+                    existing_student = next(
+                        (s for s in matching_students if s.student_name.strip().lower() == norm_name),
+                        None
+                    )
+
+                # 3. Match by partial/contained name (e.g., "Rahul" vs "Rahul Sharma")
+                if not existing_student and norm_name:
+                    existing_student = next(
+                        (s for s in matching_students if norm_name in s.student_name.strip().lower() or s.student_name.strip().lower() in norm_name),
+                        None
+                    )
+
+                # 4. Match by class if name is not specified in sheet row
+                if not existing_student and not norm_name and target_class:
                     existing_student = next((s for s in matching_students if s.school_class_id == target_class.id), None)
 
-                # 2. Match by student name
-                if not existing_student and name_val:
-                    norm_name = name_val.strip().lower()
-                    existing_student = next((s for s in matching_students if s.student_name.strip().lower() == norm_name), None)
-                    if not existing_student:
-                        # Partial name match (e.g. "Rahul" vs "Rahul Sharma")
-                        existing_student = next((s for s in matching_students if norm_name in s.student_name.strip().lower() or s.student_name.strip().lower() in norm_name), None)
-
-                # 3. If single student exists in the database with this phone number, match them!
-                if not existing_student and len(matching_students) == 1:
+                # 5. If only 1 student has this phone AND sheet row has NO name, match them
+                if not existing_student and not norm_name and len(matching_students) == 1:
                     existing_student = matching_students[0]
 
-            # 4. Fallback: match by student name + target_class if target_class known
-            if not existing_student and target_class and name_val:
+            # 6. Fallback: match by student name + target_class if target_class known (e.g. phone updated)
+            if not existing_student and target_class and norm_name:
                 existing_student = Student.objects.filter(
                     school_class=target_class,
                     student_name__iexact=name_val.strip()
@@ -1361,8 +1376,12 @@ class TestMessageView(APIView):
         body_preview = tpl.body_preview if tpl else f"Template: {template_name}"
 
         # Create MessageLog
+        cls = student.school_class if student else None
         log_entry = MessageLog.objects.create(
             student=student,
+            student_name=student.student_name if student else None,
+            class_name=cls.name if cls else None,
+            section=cls.section if cls else None,
             recipient_number=clean_recipient,
             template_name=template_name,
             status="SENT" if succ else "FAILED",
@@ -1818,6 +1837,29 @@ class ConversationDetailView(APIView):
                 ),
             }
 
+        all_students_data = []
+        target_phone = phone or (student.whatsapp_number if student else "")
+        if target_phone:
+            clean_p = sanitize_phone_number(target_phone)
+            p_filter = Q(whatsapp_number=clean_p)
+            if len(clean_p) >= 10:
+                p_filter |= Q(whatsapp_number__endswith=clean_p[-10:])
+            all_s_qs = Student.objects.filter(p_filter).select_related("school_class").order_by("id")
+            for s in all_s_qs:
+                all_students_data.append({
+                    "id": s.id,
+                    "student_name": s.student_name,
+                    "parent_name": s.parent_name,
+                    "whatsapp_number": s.whatsapp_number,
+                    "fees_due": str(s.fees_due),
+                    "class_id": s.school_class_id,
+                    "class_name": (
+                        f"{s.school_class.name} - {s.school_class.section}"
+                        if s.school_class and s.school_class.section
+                        else (s.school_class.name if s.school_class else "General")
+                    ),
+                })
+
         first_sender_name = None
         for m in chat_messages:
             if m.sender_name:
@@ -1826,6 +1868,7 @@ class ConversationDetailView(APIView):
 
         return Response({
             "student": student_data,
+            "students": all_students_data,
             "phone_number": phone or (student.whatsapp_number if student else ""),
             "recipient_name": student.student_name if student else (first_sender_name or phone),
             "total_messages": len(chat_messages),
@@ -1887,8 +1930,12 @@ class ConversationSendMessageView(APIView):
             succ = result.get("success", False)
             body_text = tpl.body_preview if tpl else f"Template: {template_name}"
 
+            cls = student.school_class if student else None
             log_entry = MessageLog.objects.create(
                 student=student,
+                student_name=student.student_name if student else None,
+                class_name=cls.name if cls else None,
+                section=cls.section if cls else None,
                 recipient_number=clean_phone,
                 template_name=template_name,
                 status="SENT" if succ else "FAILED",

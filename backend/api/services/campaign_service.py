@@ -75,10 +75,14 @@ class CampaignService:
 
         logs_to_create = []
         for s in opted_in_students:
+            cls = s.school_class
             logs_to_create.append(
                 MessageLog(
                     campaign=campaign,
                     student=s,
+                    student_name=s.student_name,
+                    class_name=cls.name if cls else "",
+                    section=cls.section if cls else "",
                     recipient_number=s.whatsapp_number,
                     template_name=template.name,
                     status="QUEUED",
@@ -86,10 +90,14 @@ class CampaignService:
             )
 
         for s in skipped_students:
+            cls = s.school_class
             logs_to_create.append(
                 MessageLog(
                     campaign=campaign,
                     student=s,
+                    student_name=s.student_name,
+                    class_name=cls.name if cls else "",
+                    section=cls.section if cls else "",
                     recipient_number=s.whatsapp_number,
                     template_name=template.name,
                     status="SKIPPED",

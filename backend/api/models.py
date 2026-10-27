@@ -122,6 +122,9 @@ class MessageLog(models.Model):
         db_column="student_id"
     )
     recipient_number = models.CharField(max_length=20)
+    student_name = models.CharField(max_length=150, null=True, blank=True, help_text="Snapshot of student name at time of message")
+    class_name = models.CharField(max_length=100, null=True, blank=True, help_text="Snapshot of class name at time of message")
+    section = models.CharField(max_length=50, null=True, blank=True, help_text="Snapshot of section at time of message")
     template_name = models.CharField(max_length=100)
     status = models.CharField(max_length=50, default="QUEUED")  # QUEUED, SENT, DELIVERED, READ, FAILED, SKIPPED
     whatsapp_message_id = models.CharField(max_length=255, null=True, blank=True, db_index=True)

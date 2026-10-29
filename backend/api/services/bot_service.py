@@ -18,6 +18,7 @@ all existing behaviour completely.
 """
 import asyncio
 import os
+import re
 from typing import Optional
 from django.utils import timezone
 from asgiref.sync import async_to_sync
@@ -117,7 +118,20 @@ STRINGS = {
             "✅ Thank you, *{name}*! Your {type_label} has been recorded and will be reviewed shortly.\n\n"
             "Reply with *Hi* anytime to open the main menu."
         ),
-        "invalid_option": "❓ Sorry, I didn't understand that. Please send *1* or *2* to choose an option.",
+        "invalid_option": (
+            "🏫 *For any other queries or information, please contact the school office directly.*\n\n"
+            "किसी भी सामान्य जानकारी के लिए कृपया स्कूल कार्यालय से संपर्क करें।\n\n"
+            "📋 *Main Menu / मुख्य मेनू:*\n"
+            "1️⃣  Complaint (शिकायत)\n"
+            "2️⃣  Feedback (सुझाव)"
+        ),
+        "contact_school_fallback": (
+            "🏫 *For any other queries or information, please contact the school office directly.*\n\n"
+            "किसी भी सामान्य जानकारी के लिए कृपया स्कूल कार्यालय से संपर्क करें।\n\n"
+            "📋 *Main Menu / मुख्य मेनू:*\n"
+            "1️⃣  Complaint (शिकायत)\n"
+            "2️⃣  Feedback (सुझाव)"
+        ),
         "invalid_category": "❓ Please send *1*, *2*, *3*, or *4* to choose a category.",
         "fee_payment_bilingual": (
             "💳 You can pay school fees online via UPI/Bank transfer or visit the school accounts counter.\n\n"
@@ -184,7 +198,20 @@ STRINGS = {
             "✅ धन्यवाद, *{name}*! आपकी {type_label} दर्ज कर ली गई है और जल्द ही इसकी समीक्षा की जाएगी।\n\n"
             "मुख्य मेनू के लिए *Hi* भेजें।"
         ),
-        "invalid_option": "❓ क्षमा करें, मैं समझ नहीं पाया। कृपया *1* या *2* भेजें।",
+        "invalid_option": (
+            "🏫 *किसी भी सामान्य जानकारी के लिए कृपया स्कूल कार्यालय से संपर्क करें।*\n\n"
+            "For any other queries or information, please contact the school office directly.\n\n"
+            "📋 *मुख्य मेनू / Main Menu:*\n"
+            "1️⃣  शिकायत (Complaint)\n"
+            "2️⃣  सुझाव (Feedback)"
+        ),
+        "contact_school_fallback": (
+            "🏫 *किसी भी सामान्य जानकारी के लिए कृपया स्कूल कार्यालय से संपर्क करें।*\n\n"
+            "For any other queries or information, please contact the school office directly.\n\n"
+            "📋 *मुख्य मेनू / Main Menu:*\n"
+            "1️⃣  शिकायत (Complaint)\n"
+            "2️⃣  सुझाव (Feedback)"
+        ),
         "invalid_category": "❓ कृपया श्रेणी चुनने के लिए *1*, *2*, *3* या *4* भेजें।",
         "fee_payment_bilingual": (
             "💳 आप स्कूल फीस का भुगतान ऑनलाइन UPI/बैंक ट्रांसफर या स्कूल काउंटर पर कर सकते हैं।\n\n"
@@ -325,30 +352,31 @@ def _is_change_language_intent(text: str) -> bool:
 
 
 def _is_payment_query(text: str) -> bool:
-    """Detect if user is asking about fee payments, online payment, dues, etc."""
+    """
+    Detect if user is asking about fee payments, online payment, dues, etc.
+    CRITICAL: Never matches 'feedback', 'suggestion', 'complaint', or menu options!
+    """
     if not text:
         return False
     t = text.strip().lower()
-    fee_keywords = (
-        "fee", "fees", "pay", "payment", "online", "upi", "qr", "bank",
-        "account", "due", "dues", "किस्त", "फीस", "पेमेंट", "ऑनलाइन", "पे",
-        "can i pay", "pay online", "online pay", "online payment"
-    )
-    return any(w in t for w in fee_keywords)
+
+    # Never match menu words or feedback/complaint words as fee queries
+    if any(w in t for w in ("feedback", "sujhav", "सुझाव", "suggestion", "complaint", "shikayat", "शिकायत")):
+        return False
+    if t in ("1", "2", "3", "4"):
+        return False
+
+    fee_pattern = r'\b(fees?|fee\s+structure|school\s+fees?|tuition\s+fees?|pay\s+fees?|fees?\s+pay|pay\s+online|online\s+pay|online\s+payment|upi|qr\s*code|bank\s+transfer|challan|dues?)\b'
+    if re.search(fee_pattern, t):
+        return True
+
+    hindi_fee = ("फीस", "शुल्क", "किस्त", "पेमेंट", "पेमेन्ट", "ऑनलाइन फीस", "फीस जमा")
+    return any(w in t for w in hindi_fee)
 
 
 def _is_admission_or_general_query(text: str) -> bool:
-    """Detect if user is asking about admissions, general inquiry, or school contact."""
-    if not text:
-        return False
-    t = text.strip().lower()
-    query_keywords = (
-        "admission", "admissions", "admission related", "new admission",
-        "query", "queries", "enquiry", "inquiry", "contact", "contact school",
-        "office", "phone", "call", "helpdesk", "question", "doubt",
-        "एडमिशन", "प्रवेश", "पूछताछ", "संपर्क", "जानकारी"
-    )
-    return any(w in t for w in query_keywords)
+    """Disabled per specification: bot does not intercept admission/vacancy/contact queries."""
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -477,24 +505,36 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
             profile.save(update_fields=["conversation_state", "updated_at"])
             return
 
-        # ── Global Interceptions (when not actively typing free-text in AWAIT_MESSAGE) ──
-        if state != "AWAIT_MESSAGE":
-            # 1. Payment / Fee Query ("can i pay online", "fees", "upi", etc.)
+        # ── Global Interceptions (when not actively typing free-text or choosing options) ──
+        if state not in ("AWAIT_MESSAGE", "AWAIT_CATEGORY", "MENU"):
+            # Payment / Fee Query ("can i pay online", "fees", "upi", etc.) - never matches feedback
             if _is_payment_query(text_lower):
                 _send_text_sync(phone, _t(profile, "fee_payment_bilingual"), student=student)
                 profile.conversation_state = "WELCOME_AFTER_QUERY"
                 profile.save(update_fields=["conversation_state", "updated_at"])
                 return
 
-            # 2. Admission or General Query ("admission related", "query", etc.)
-            if _is_admission_or_general_query(text_lower):
-                _send_text_sync(phone, _t(profile, "admission_query_bilingual"), student=student)
-                profile.conversation_state = "WELCOME_AFTER_QUERY"
-                profile.save(update_fields=["conversation_state", "updated_at"])
+        # ── WELCOME or WELCOME_AFTER_QUERY (User says something next → ask language or handle choice) ──
+        if state in ("WELCOME", "WELCOME_AFTER_QUERY", "WELCOME_AFTER_FEE"):
+            # Check if user directly said "feedback" or "complaint" (or 1/2)
+            choice = MENU_MAP.get(text_clean) or MENU_MAP.get(text_lower)
+            if choice is None:
+                if any(w in text_lower for w in ("complaint", "shikayat", "शिकायत", "sikayat")):
+                    choice = "COMPLAINT"
+                elif any(w in text_lower for w in ("feedback", "sujhav", "सुझाव", "suggestion")):
+                    choice = "FEEDBACK"
+
+            if choice in ("COMPLAINT", "FEEDBACK"):
+                profile.pending_type = choice
+                profile.conversation_state = "AWAIT_CATEGORY"
+                profile.save(update_fields=["pending_type", "conversation_state", "updated_at"])
+                _send_text_sync(
+                    phone,
+                    _t(profile, "choose_category", type_label=_type_label(profile, choice)),
+                    student=student,
+                )
                 return
 
-        # ── WELCOME or WELCOME_AFTER_QUERY (User says something next → ask language) ──
-        if state in ("WELCOME", "WELCOME_AFTER_QUERY", "WELCOME_AFTER_FEE"):
             _send_text_sync(phone, _t(profile, "lang_selection"), student=student)
             profile.conversation_state = "AWAIT_LANG"
             profile.save(update_fields=["conversation_state", "updated_at"])
@@ -502,6 +542,26 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
 
         # ── AWAIT_LANG (User choosing language) ────────────────────────────
         if state == "AWAIT_LANG":
+            # If user directly sends "feedback" or "complaint" during language prompt
+            choice = MENU_MAP.get(text_clean) or MENU_MAP.get(text_lower)
+            if choice is None:
+                if any(w in text_lower for w in ("complaint", "shikayat", "शिकायत", "sikayat")):
+                    choice = "COMPLAINT"
+                elif any(w in text_lower for w in ("feedback", "sujhav", "सुझाव", "suggestion")):
+                    choice = "FEEDBACK"
+
+            if choice in ("COMPLAINT", "FEEDBACK"):
+                profile.language = "hi" if any(w in text_lower for w in ("शिकायत", "सुझाव")) else "en"
+                profile.pending_type = choice
+                profile.conversation_state = "AWAIT_CATEGORY"
+                profile.save(update_fields=["language", "pending_type", "conversation_state", "updated_at"])
+                _send_text_sync(
+                    phone,
+                    _t(profile, "choose_category", type_label=_type_label(profile, choice)),
+                    student=student,
+                )
+                return
+
             if text_lower in ("1", "english", "eng", "इंग्लिश"):
                 profile.language = "en"
                 confirm = _t(profile, "lang_set")
@@ -544,30 +604,28 @@ def handle_inbound_message(phone: str, text: str, sender_name: Optional[str] = N
                 )
                 return
 
-            # Check if user is asking about fees / online payment in MENU
-            fee_keywords = ("fee", "fees", "pay", "payment", "online", "upi", "qr", "bank", "account", "due", "dues", "किस्त", "फीस", "पेमेंट")
-            if any(w in text_lower for w in fee_keywords):
+            # Check if user is asking about fees / online payment in MENU (never matches feedback)
+            if _is_payment_query(text_lower):
                 _send_text_sync(phone, _t(profile, "fee_info"), student=student)
                 return
 
-            # Unrecognised option
+            # Unrecognised option / other related messages
             _send_text_sync(phone, _t(profile, "invalid_option"), student=student)
-            _send_text_sync(phone, _t(profile, "menu"), student=student)
             return
 
         # ── AWAIT_CATEGORY ────────────────────────────────────────────────
         if state == "AWAIT_CATEGORY":
             category = CATEGORY_MAP.get(text_clean) or CATEGORY_MAP.get(text_lower)
             if category is None:
-                # Natural language match
+                # Natural language match for Teacher, School, Class/Study, Other
                 lower = text_lower
-                if any(w in lower for w in ("study", "padhai", "पढ़ाई", "education", "class", "homework")):
+                if any(w in lower for w in ("study", "class", "classes", "padhai", "पढ़ाई", "education", "homework", "exam", "syllabus")):
                     category = "STUDY"
-                elif any(w in lower for w in ("school", "स्कूल", "building", "facility", "bus")):
+                elif any(w in lower for w in ("school", "स्कूल", "building", "facility", "bus", "transport", "campus")):
                     category = "SCHOOL"
-                elif any(w in lower for w in ("teacher", "शिक्षक", "sir", "ma'am", "mam", "adityasir")):
+                elif any(w in lower for w in ("teacher", "teachers", "शिक्षक", "sir", "ma'am", "mam", "madam", "staff")):
                     category = "TEACHER"
-                elif any(w in lower for w in ("other", "अन्य", "kuch aur", "dusra")):
+                elif any(w in lower for w in ("other", "अन्य", "kuch aur", "dusra", "general")):
                     category = "OTHER"
                 else:
                     category = None

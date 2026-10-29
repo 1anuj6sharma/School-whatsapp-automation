@@ -303,8 +303,8 @@ def _get_or_create_profile(phone: str, sender_name: Optional[str] = None):
     elif student and profile.display_name != student.student_name:
         profile.display_name = student.student_name
         changed = True
-    elif not student and sender_name and profile.display_name == "WhatsApp User":
-        profile.display_name = sender_name
+    elif not student and sender_name and sender_name.strip() and (profile.display_name in ("WhatsApp User", "WhatsApp Contact", "") or profile.display_name != sender_name.strip()):
+        profile.display_name = sender_name.strip()
         changed = True
 
     if changed:

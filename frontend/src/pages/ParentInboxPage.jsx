@@ -731,7 +731,7 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
 
                   {/* Header Avatar */}
                   <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-emerald-600 text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-xs">
-                    {(activeStudent?.student_name || 'WA')
+                    {(activeStudent?.student_name || conversationData?.recipient_name || 'WA')
                       .split(' ')
                       .slice(0, 2)
                       .map((w) => w[0])
@@ -743,7 +743,7 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="text-xs sm:text-sm font-black text-slate-900 truncate">
-                        {activeStudent?.student_name || 'WhatsApp Contact'}
+                        {activeStudent?.student_name || conversationData?.recipient_name || 'WhatsApp Contact'}
                       </h3>
                       {activeStudent?.class_name && (
                         <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold rounded-md shrink-0">
@@ -851,7 +851,7 @@ export function ParentInboxPage({ showToast, initialContact = null }) {
                             {!isOutbound && (
                               <div className="font-bold text-[11px] text-emerald-700 mb-1 flex items-center gap-1">
                                 <User className="w-3 h-3" />
-                                <span>{msg.sender_name || activeStudent?.parent_name || 'Parent'}</span>
+                                <span>{msg.sender_name || activeStudent?.parent_name || activeStudent?.student_name || 'Parent'}</span>
                               </div>
                             )}
 

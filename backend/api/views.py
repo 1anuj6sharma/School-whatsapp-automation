@@ -1939,7 +1939,11 @@ class ConversationListView(APIView):
                             cm.phone_number,
                             COUNT(*) as total_msgs,
                             COUNT(*) FILTER (WHERE cm.direction = 'INBOUND' AND cm.status IN ('RECEIVED', 'UNREAD')) as unread_count,
-                            COUNT(*) FILTER (WHERE cm.direction = 'INBOUND') as inbound_count
+                            COUNT(*) FILTER (WHERE cm.direction = 'INBOUND') as inbound_count,
+                            COALESCE(
+                                MAX(cm.sender_name) FILTER (WHERE cm.direction = 'INBOUND' AND cm.sender_name IS NOT NULL AND cm.sender_name != '' AND cm.sender_name NOT IN ('WhatsApp User', 'WhatsApp Contact')),
+                                MAX(cm.sender_name) FILTER (WHERE cm.sender_name IS NOT NULL AND cm.sender_name != '' AND cm.sender_name NOT IN ('WhatsApp User', 'WhatsApp Contact'))
+                            ) as sender_name
                         FROM chat_messages cm
                         WHERE cm.phone_number IS NOT NULL AND cm.phone_number != ''
                         GROUP BY cm.phone_number
@@ -1959,6 +1963,16 @@ class ConversationListView(APIView):
                         LEFT JOIN classes cl ON cl.id = st.class_id
                         WHERE st.whatsapp_number IS NOT NULL AND st.whatsapp_number != ''
                         GROUP BY RIGHT(st.whatsapp_number, 10)
+                    ),
+                    bup_group AS (
+                        SELECT
+                            RIGHT(bup.phone_number, 10) as phone_tail,
+                            MAX(bup.display_name) as bot_display_name
+                        FROM bot_user_profiles bup
+                        WHERE bup.phone_number IS NOT NULL AND bup.phone_number != ''
+                          AND bup.display_name IS NOT NULL AND bup.display_name != ''
+                          AND bup.display_name NOT IN ('WhatsApp User', 'WhatsApp Contact')
+                        GROUP BY RIGHT(bup.phone_number, 10)
                     )
                     SELECT 
                         rm.phone_number,
@@ -1971,10 +1985,13 @@ class ConversationListView(APIView):
                         pa.total_msgs,
                         pa.unread_count,
                         pa.inbound_count,
-                        sg.students_json
+                        sg.students_json,
+                        pa.sender_name,
+                        bg.bot_display_name
                     FROM ranked_messages rm
                     JOIN phone_agg pa ON pa.phone_number = rm.phone_number
                     LEFT JOIN student_group sg ON sg.phone_tail = RIGHT(rm.phone_number, 10)
+                    LEFT JOIN bup_group bg ON bg.phone_tail = RIGHT(rm.phone_number, 10)
                     WHERE rm.rn = 1
                     ORDER BY rm.created_at DESC
                     LIMIT 1000
@@ -1983,10 +2000,16 @@ class ConversationListView(APIView):
 
             conversations = []
             for row in raw_rows:
-                phone, direction, m_type, text, template, st_status, created_at, total_msgs, unread_cnt, inbound_cnt, students_json = row
+                phone, direction, m_type, text, template, st_status, created_at, total_msgs, unread_cnt, inbound_cnt, students_json, sender_name, bot_display_name = row
 
                 st_list = students_json if isinstance(students_json, list) else []
                 primary_student = st_list[0] if st_list else None
+
+                fallback_name = (sender_name or bot_display_name or "").strip()
+                if not fallback_name or fallback_name in ("WhatsApp User", "WhatsApp Contact"):
+                    fallback_name = "WhatsApp Contact"
+
+                contact_name = primary_student["student_name"] if primary_student else fallback_name
 
                 snippet = text or (f"Template: {template}" if template else f"[{m_type or 'Message'}]")
                 if len(snippet) > 85:
@@ -1995,7 +2018,7 @@ class ConversationListView(APIView):
                 conv_item = {
                     "phone_number": phone,
                     "student_id": primary_student["id"] if primary_student else None,
-                    "student_name": primary_student["student_name"] if primary_student else "WhatsApp Contact",
+                    "student_name": contact_name,
                     "parent_name": primary_student["parent_name"] if primary_student else "",
                     "class_name": primary_student["class_name"] if primary_student else "Direct Contact",
                     "class_id": primary_student["class_id"] if primary_student else None,
@@ -2231,17 +2254,48 @@ class ConversationDetailView(APIView):
                     ),
                 })
 
-        first_sender_name = None
-        for m in chat_messages:
-            if m.sender_name:
-                first_sender_name = m.sender_name
-                break
+        if not student_data:
+            fallback_name = None
+            for m in reversed(chat_messages):
+                sname = (m.sender_name or "").strip()
+                if sname and sname not in ("WhatsApp User", "WhatsApp Contact"):
+                    fallback_name = sname
+                    break
+            if not fallback_name:
+                for m in chat_messages:
+                    sname = (m.sender_name or "").strip()
+                    if sname and sname not in ("WhatsApp User", "WhatsApp Contact"):
+                        fallback_name = sname
+                        break
+            if not fallback_name and phone:
+                clean_p = sanitize_phone_number(phone)
+                p_filter = Q(phone_number=clean_p)
+                if len(clean_p) >= 10:
+                    p_filter |= Q(phone_number__endswith=clean_p[-10:])
+                bup = BotUserProfile.objects.filter(p_filter).exclude(
+                    display_name__in=["WhatsApp User", "WhatsApp Contact", ""]
+                ).first()
+                if bup and bup.display_name:
+                    fallback_name = bup.display_name.strip()
+
+            contact_name = fallback_name or "WhatsApp Contact"
+            student_data = {
+                "id": None,
+                "student_name": contact_name,
+                "parent_name": "",
+                "whatsapp_number": phone or "",
+                "fees_due": None,
+                "class_id": None,
+                "class_name": "Direct Contact",
+            }
+
+        recipient_display_name = student.student_name if student else (student_data["student_name"] if student_data else (phone or "WhatsApp Contact"))
 
         return Response({
             "student": student_data,
             "students": all_students_data,
             "phone_number": phone or (student.whatsapp_number if student else ""),
-            "recipient_name": student.student_name if student else (first_sender_name or phone),
+            "recipient_name": recipient_display_name,
             "total_messages": len(chat_messages),
             "messages": ChatMessageSerializer(chat_messages, many=True).data,
         })

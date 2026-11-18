@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "corsheaders",
     # Local apps
     "api.apps.ApiConfig",
+    "fees.apps.FeesConfig",
 ]
 
 MIDDLEWARE = [

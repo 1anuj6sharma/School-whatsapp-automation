@@ -9,5 +9,7 @@ urlpatterns = [
     path('health', HealthCheckView.as_view(), name='health-root'),
     path('health/', HealthCheckView.as_view(), name='health-slash'),
     re_path(r'^uploads/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+    path('api/fees/', include('fees.urls')),
+    path('api/fees', include('fees.urls')),
     path('', include('api.urls')),
 ]

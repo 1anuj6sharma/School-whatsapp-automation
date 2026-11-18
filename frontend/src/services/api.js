@@ -494,5 +494,104 @@ export const api = {
     const res = await fetch(url.pathname + url.search);
     return handleResponse(res);
   },
+
+  // ─── NEW FEE APP: Management Section ──────────────────────────────────────
+  async getFeeSlabs(params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/management/slabs`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async createFeeSlab(data) {
+    const res = await fetch(`${API_BASE}/api/fees/management/slabs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async updateFeeSlab(id, data) {
+    const res = await fetch(`${API_BASE}/api/fees/management/slabs/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async deleteFeeSlab(id) {
+    const res = await fetch(`${API_BASE}/api/fees/management/slabs/${id}`, {
+      method: 'DELETE',
+    });
+    return handleResponse(res);
+  },
+
+  async postQuarterlyFees(data) {
+    const res = await fetch(`${API_BASE}/api/fees/management/post-quarterly-fees/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async getJournalEntries(params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/management/journal-entries`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  // ─── NEW FEE APP: Operator Section ────────────────────────────────────────
+  async getOperatorStudentFeeSummary(studentId, params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/operator/student-summary/${studentId}`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async sendCashPaymentOTP(data) {
+    const res = await fetch(`${API_BASE}/api/fees/operator/send-otp/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async verifyPaymentOTP(data) {
+    const res = await fetch(`${API_BASE}/api/fees/operator/verify-otp/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async getFeeDefaulters(params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/operator/defaulters/`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async getStudentPassbook(studentId, params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/operator/student-passbook/${studentId}/`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
 };
 

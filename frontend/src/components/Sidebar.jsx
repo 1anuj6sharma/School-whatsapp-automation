@@ -9,6 +9,8 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  IndianRupee,
+  Receipt,
   MessageSquareShare,
   MessageSquareHeart,
   MessageSquareQuote,
@@ -18,7 +20,7 @@ import {
 } from 'lucide-react';
 
 export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose, currentUser, onLogout }) => {
-  const navItems = [
+  const mainNavItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'send-message', label: 'Send Message', icon: Send, highlight: true },
     { id: 'complaints-feedback', label: 'Complaints & Feedback', icon: MessageSquareQuote },
@@ -27,6 +29,17 @@ export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose, currentUser,
     { id: 'templates', label: 'Templates', icon: FileCode },
     { id: 'campaigns', label: 'Campaigns', icon: Layers },
     { id: 'inbox', label: 'Parent Inbox', icon: MessageSquareShare, highlight: false },
+  ];
+
+  const operatorNavItems = [
+    { id: 'fee-counter', label: 'Cash & OTP Counter', icon: Receipt },
+  ];
+
+  const managementNavItems = [
+    { id: 'fee-management', label: 'Fee Slabs & Schedulers', icon: IndianRupee },
+  ];
+
+  const systemNavItems = [
     { id: 'logs', label: 'Message Logs', icon: ScrollText },
     { id: 'settings', label: 'Settings & Test', icon: Settings },
   ];
@@ -38,18 +51,66 @@ export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose, currentUser,
     }
   };
 
+  const renderNavGroup = (title, items, badgeColor = 'bg-slate-100 text-slate-600') => (
+    <div className="space-y-1">
+      {title && (
+        <div className="px-3.5 pt-3 pb-1 flex items-center justify-between">
+          <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+            {title}
+          </span>
+        </div>
+      )}
+      {items.map((item) => {
+        const Icon = item.icon;
+        const isActive = activeTab === item.id;
+
+        return (
+          <button
+            key={item.id}
+            onClick={() => handleItemClick(item.id)}
+            className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-medium transition-all duration-150 cursor-pointer ${
+              isActive
+                ? item.highlight
+                  ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                  : 'bg-emerald-50 text-emerald-800 font-bold border border-emerald-200/80'
+                : item.highlight
+                ? 'text-emerald-700 bg-emerald-50/60 hover:bg-emerald-50 font-semibold'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+            }`}
+          >
+            <Icon
+              className={`w-4 h-4 shrink-0 ${
+                isActive
+                  ? item.highlight
+                    ? 'text-white'
+                    : 'text-emerald-600'
+                  : item.highlight
+                  ? 'text-emerald-600'
+                  : 'text-slate-500'
+              }`}
+            />
+            <span className="truncate">{item.label}</span>
+            {item.highlight && !isActive && (
+              <span className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   const sidebarContent = (
     <aside className="w-64 bg-white border-r border-slate-200/90 flex flex-col justify-between h-full shadow-xs">
-      <div>
+      <div className="flex-1 overflow-y-auto no-scrollbar">
         {/* Brand / Logo */}
-        <div className="p-6 flex items-center justify-between border-b border-slate-100">
-          <div className="flex items-center gap-3.5">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-sm shadow-emerald-600/30">
-              <MessageSquareShare className="w-5 h-5" />
+        <div className="p-5 flex items-center justify-between border-b border-slate-100 sticky top-0 bg-white z-10">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-xs">
+              <MessageSquareShare className="w-4 h-4" />
             </div>
             <div>
-              <h1 className="font-bold text-base text-slate-900 tracking-tight leading-none">School WA</h1>
-              <p className="text-[11px] font-semibold text-emerald-600 mt-1 uppercase tracking-wider">Cloud Broadcast</p>
+              <h1 className="font-bold text-sm text-slate-900 tracking-tight leading-none">School WA</h1>
+              <p className="text-[10px] font-semibold text-emerald-600 mt-1 uppercase tracking-wider">Broadcast Suite</p>
             </div>
           </div>
           {onClose && (
@@ -58,49 +119,30 @@ export const Sidebar = ({ activeTab, setActiveTab, isOpen, onClose, currentUser,
               className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
               aria-label="Close Sidebar"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           )}
         </div>
 
-        {/* Navigation Items */}
-        <nav className="p-3.5 space-y-1">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
+        {/* Navigation Sections */}
+        <nav className="p-3 space-y-2">
+          {/* Group 1: General & WhatsApp */}
+          {renderNavGroup('Broadcast & WhatsApp', mainNavItems)}
 
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleItemClick(item.id)}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${
-                  isActive
-                    ? item.highlight
-                      ? 'bg-emerald-600 text-white font-semibold shadow-sm shadow-emerald-600/20'
-                      : 'bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200/60'
-                    : item.highlight
-                    ? 'text-emerald-700 bg-emerald-50/60 hover:bg-emerald-50 font-semibold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
-                }`}
-              >
-                <Icon
-                  className={`w-4 h-4 ${
-                    isActive
-                      ? item.highlight
-                        ? 'text-white'
-                        : 'text-emerald-600'
-                      : item.highlight
-                      ? 'text-emerald-600'
-                      : 'text-slate-500'
-                  }`}
-                />
-                <span>{item.label}</span>
-                {item.highlight && !isActive && (
-                  <span className="ml-auto w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                )}
-              </button>
-            );
-          })}
+          {/* Group 2: Operator Section */}
+          <div className="pt-1 border-t border-slate-100">
+            {renderNavGroup('Operator Section', operatorNavItems)}
+          </div>
+
+          {/* Group 3: Management Section */}
+          <div className="pt-1 border-t border-slate-100">
+            {renderNavGroup('Management Section', managementNavItems)}
+          </div>
+
+          {/* Group 4: System */}
+          <div className="pt-1 border-t border-slate-100">
+            {renderNavGroup('System & Logs', systemNavItems)}
+          </div>
         </nav>
       </div>
 

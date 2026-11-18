@@ -76,9 +76,29 @@ class HealthCheckView(APIView):
         })
 
 
+import re
+
+def get_natural_class_sort_key(c):
+    raw = (getattr(c, "name", "") or "").strip().upper()
+    sec = (getattr(c, "section", "") or "").strip().upper()
+    pre_primary = {
+        "PLAY": 1, "PLAYWAY": 1, "PLAY-WAY": 1, "PRE-NURSERY": 1, "PRE NURSERY": 1,
+        "NURSERY": 2, "NURSURY": 2, "KG": 3, "LKG": 3, "L.K.G": 3, "JR": 3,
+        "UKG": 4, "U.K.G": 4, "SR": 4, "PREP": 4
+    }
+    for k, rank in pre_primary.items():
+        if k in raw:
+            return (0, rank, sec, raw)
+    m = re.search(r'\b(\d+)\b', raw) or re.search(r'(\d+)', raw)
+    if m:
+        return (1, int(m.group(1)), sec, raw)
+    return (2, 999, sec, raw)
+
+
 class ClassListCreateView(APIView):
     def get(self, request):
-        classes = Class.objects.annotate(student_count_annotated=Count("students")).order_by("name")
+        classes = list(Class.objects.annotate(student_count_annotated=Count("students")))
+        classes.sort(key=get_natural_class_sort_key)
         serializer = ClassSerializer(classes, many=True)
         return Response(serializer.data)
 
@@ -120,6 +140,12 @@ class ClassDetailView(APIView):
 
 class StudentListCreateView(APIView):
     def get(self, request):
+        try:
+            from fees.services import sync_students_fees_due
+            sync_students_fees_due()
+        except Exception:
+            pass
+
         class_id = request.query_params.get("class_id")
         class_ids = request.query_params.get("class_ids")
         search = request.query_params.get("search")

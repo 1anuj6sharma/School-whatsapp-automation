@@ -16,6 +16,8 @@ import { CampaignDetailPage } from './pages/CampaignDetailPage';
 import { MessageLogsPage } from './pages/MessageLogsPage';
 import { ComplaintsFeedbackPage } from './pages/ComplaintsFeedbackPage';
 import { ParentInboxPage } from './pages/ParentInboxPage';
+import { FeeManagementPage } from './pages/FeeManagementPage';
+import { FeeCounterPage } from './pages/FeeCounterPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -211,6 +213,16 @@ export function App() {
             {activeTab === 'inbox' && (
               <ParentInboxPage
                 initialContact={selectedInboxContact}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'fee-counter' && (
+              <FeeCounterPage
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'fee-management' && (
+              <FeeManagementPage
                 showToast={addToast}
               />
             )}

@@ -1,9 +1,12 @@
+name: school_whatsapp_demo
+
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: school_whatsapp_backend
+    image: school_whatsapp_backend_demo:latest
+    container_name: school_whatsapp_backend_demo
     restart: unless-stopped
     env_file:
       - .env
@@ -23,22 +26,23 @@ services:
       retries: 5
       start_period: 5s
     networks:
-      - school_net
+      - school_net_demo
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: school_whatsapp_frontend
+    image: school_whatsapp_frontend_demo:latest
+    container_name: school_whatsapp_frontend_demo
     restart: unless-stopped
     ports:
-      - "3010:80"
+      - "${APP_PORT:-3020}:80"
     depends_on:
       backend:
         condition: service_healthy
     networks:
-      - school_net
+      - school_net_demo
 
 networks:
-  school_net:
+  school_net_demo:
     driver: bridge

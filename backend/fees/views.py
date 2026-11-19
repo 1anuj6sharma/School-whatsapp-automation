@@ -3,11 +3,14 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db.models import Sum, Count, Q
+from django.db import transaction
 from decimal import Decimal
 
-from .models import FeeSlab, Account, JournalEntry, JournalItem, FeePaymentSession
+from .models import FeeClass, FeeStudent, FeeSlab, Account, JournalEntry, JournalItem, FeePaymentSession
 from .serializers import (
-    FeeSlabSerializer, AccountSerializer, JournalEntrySerializer, FeePaymentSessionSerializer
+    FeeClassSerializer, FeeStudentSerializer, FeeSlabSerializer, AccountSerializer,
+    JournalEntrySerializer, JournalItemSerializer, FeePaymentSessionSerializer
 )
 from .services import (
     ensure_default_accounts,
@@ -17,17 +20,470 @@ from .services import (
     calculate_late_penalty,
     generate_counter_payment_otp,
     verify_counter_payment_otp_and_commit,
+    record_offline_direct_payment,
     post_journal_entry,
-    get_or_create_student_receivable_account
+    get_or_create_student_receivable_account,
+    sync_roster_from_school_students
 )
-from django.db import transaction
-from api.models import Student, Class
 from api.services.whatsapp_service import whatsapp_service
 from api.utils.logger import logger
 
+# Alias dedicated models for full isolation from marketing Student/Class
+Student = FeeStudent
+Class = FeeClass
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. MANAGEMENT SECTION (School Admin / Principal)
+# 1. MANAGEMENT SECTION (School Admin / Principal / Accountant)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+class ManagementFeeClassesView(APIView):
+    """
+    Management API: List and create Fee Classes.
+    Completely isolated from marketing classes.
+    """
+    def get(self, request):
+        classes = list(FeeClass.objects.annotate(student_count_annotated=Count("students")).all())
+        if not classes:
+            from api.models import Class as MarketingClass
+            for mc in MarketingClass.objects.all():
+                FeeClass.objects.get_or_create(
+                    name=mc.name,
+                    section=mc.section or "A",
+                    defaults={"description": f"Fee Class {mc.name}"}
+                )
+            classes = list(FeeClass.objects.annotate(student_count_annotated=Count("students")).all())
+
+        import re
+        def class_sort_key(c):
+            raw = (c.name or "").strip().upper()
+            sec = (c.section or "").strip().upper()
+            pre_primary = {
+                "PLAY": 1, "PLAYWAY": 1, "PRE-NURSERY": 1, "NURSERY": 2, "NURSURY": 2,
+                "KG": 3, "LKG": 3, "UKG": 4
+            }
+            for k, rank in pre_primary.items():
+                if k in raw:
+                    return (0, rank, sec, raw)
+            m = re.search(r'\b(\d+)\b', raw) or re.search(r'(\d+)', raw)
+            if m:
+                return (1, int(m.group(1)), sec, raw)
+            return (2, 999, sec, raw)
+
+        classes.sort(key=class_sort_key)
+        serializer = FeeClassSerializer(classes, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        name = request.data.get("name", "").strip()
+        section = request.data.get("section", "A").strip()
+        desc = request.data.get("description", "").strip()
+
+        if not name:
+            return Response({"error": "Class name is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        fc, created = FeeClass.objects.get_or_create(
+            name=name,
+            section=section,
+            defaults={"description": desc}
+        )
+        return Response(FeeClassSerializer(fc).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class ManagementFeeStudentsView(APIView):
+    """
+    Management API: List or create FeeStudents (Isolated from marketing students).
+    """
+    def get(self, request):
+        if FeeStudent.objects.count() == 0:
+            sync_roster_from_school_students()
+
+        class_id = request.query_params.get("class_id")
+        search = request.query_params.get("search")
+        academic_year = request.query_params.get("academic_year", "2026-2027")
+
+        if not FeeStudent.objects.exists():
+            try:
+                sync_roster_from_school_students()
+            except Exception as e:
+                logger.error(f"[Auto Sync Roster Error] {e}")
+
+        qs = FeeStudent.objects.select_related("fee_class").order_by("student_name")
+        if class_id:
+            qs = qs.filter(fee_class_id=class_id)
+        if search:
+            s_term = search.strip()
+            qs = qs.filter(
+                Q(student_name__icontains=s_term) |
+                Q(parent_name__icontains=s_term) |
+                Q(whatsapp_number__icontains=s_term)
+            )
+
+        students = list(qs)
+        slabs = FeeSlab.objects.filter(academic_year=academic_year, is_active=True).prefetch_related("classes")
+        class_to_slab = {}
+        for s in slabs:
+            for c in s.classes.all():
+                class_to_slab[c.id] = s.name
+
+        results = []
+        for st in students:
+            slab_name = class_to_slab.get(st.fee_class_id, "No Slab Assigned")
+            cls_name = f"{st.fee_class.name} ({st.fee_class.section})" if (st.fee_class and st.fee_class.section) else (st.fee_class.name if st.fee_class else "General Class")
+            results.append({
+                "id": st.id,
+                "student_name": st.student_name,
+                "parent_name": st.parent_name or "",
+                "whatsapp_number": st.whatsapp_number,
+                "class_id": st.fee_class_id,
+                "class_name": cls_name,
+                "slab_name": slab_name,
+                "fees_due": str(st.fees_due),
+                "is_active": st.is_active,
+                "created_at": st.created_at.strftime("%d-%b-%Y"),
+            })
+
+        return Response({
+            "total_count": len(results),
+            "students": results
+        })
+
+    def post(self, request):
+        name = request.data.get("student_name", "").strip()
+        parent = request.data.get("parent_name", "").strip()
+        phone = request.data.get("whatsapp_number", "").strip()
+        class_id = request.data.get("class_id")
+        admission_number = request.data.get("admission_number", "").strip()
+
+        if not name or not phone:
+            return Response({"error": "student_name and whatsapp_number are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        fee_cls = FeeClass.objects.filter(id=class_id).first() if class_id else None
+        st = FeeStudent.objects.create(
+            student_name=name,
+            parent_name=parent,
+            whatsapp_number=phone,
+            fee_class=fee_cls,
+            admission_number=admission_number,
+        )
+        get_or_create_student_receivable_account(st)
+        return Response(FeeStudentSerializer(st).data, status=status.HTTP_201_CREATED)
+
+
+class ManagementFeeStudentsSyncRosterView(APIView):
+    """
+    Management API: Copies school roster into isolated FeeStudents without touching marketing students.
+    """
+    def post(self, request):
+        res = sync_roster_from_school_students()
+        return Response({
+            "message": "School students roster synchronized into Fee Accounts successfully!",
+            "details": res
+        })
+
+
+class ManagementAccountsListView(APIView):
+    """
+    Management API: Chart of Accounts (COA) list with live debits, credits, and net balances.
+    """
+    COA_METADATA = {
+        "1010": {"type": "Asset", "purpose": "Cash held by fee desk operators"},
+        "1020": {"type": "Asset", "purpose": "Direct bank transfers or UPI payments"},
+        "1100": {"type": "Asset", "purpose": "What parents owe the school (Sub-ledger per student)"},
+        "4010": {"type": "Income", "purpose": "Earned quarterly tuition income"},
+        "4020": {"type": "Income", "purpose": "Cultural, sports, event fees"},
+        "4030": {"type": "Income", "purpose": "₹100 / ₹500 penalties"},
+        "4090": {"type": "Contra-Income", "purpose": "10% discount on annual upfront pay"},
+    }
+
+    def get(self, request):
+        ensure_default_accounts()
+        academic_year = request.query_params.get("academic_year", "2026-2027")
+        standard_only = request.query_params.get("standard_only", "false").lower() in ("true", "1", "yes")
+        page = request.query_params.get("page")
+        page_size = int(request.query_params.get("page_size", 25))
+        search = request.query_params.get("search", "").strip()
+
+        accounts_qs = Account.objects.select_related("student").order_by("code")
+        if standard_only:
+            accounts_qs = accounts_qs.filter(~Q(code__contains="-"))
+        if search:
+            accounts_qs = accounts_qs.filter(Q(name__icontains=search) | Q(code__icontains=search) | Q(student__student_name__icontains=search))
+
+        accounts = list(accounts_qs)
+        aggs = JournalItem.objects.filter(
+            journal_entry__academic_year=academic_year
+        ).values("account_id").annotate(
+            total_dr=Sum("debit"),
+            total_cr=Sum("credit"),
+            txn_count=Count("id")
+        )
+        agg_map = {row["account_id"]: row for row in aggs}
+
+        # Check active late fee penalties from defaulters engine
+        defaulters_data = get_all_students_quarterly_defaulters(academic_year=academic_year, only_late=True)
+        active_late_penalties = Decimal(str(defaulters_data.get("total_penalties") or defaulters_data.get("total_late_penalties") or "0.00"))
+        overdue_cnt = defaulters_data.get("overdue_students_count", 0)
+
+        student_penalty_map = {}
+        for s_row in (defaulters_data.get("defaulters") or defaulters_data.get("students") or []):
+            p_val = Decimal(str(s_row.get("late_penalty", "0.00")))
+            if p_val > 0:
+                student_penalty_map[s_row["student_id"]] = p_val
+
+        # Direct database roll-up for control accounts across all sub-ledgers
+        ctrl_aggs = {
+            "1010": JournalItem.objects.filter(journal_entry__academic_year=academic_year, account__code__startswith="1010").aggregate(dr=Sum("debit"), cr=Sum("credit"), cnt=Count("id")),
+            "1020": JournalItem.objects.filter(journal_entry__academic_year=academic_year, account__code__startswith="1020").aggregate(dr=Sum("debit"), cr=Sum("credit"), cnt=Count("id")),
+            "1100": JournalItem.objects.filter(journal_entry__academic_year=academic_year, account__code__startswith="1100").aggregate(dr=Sum("debit"), cr=Sum("credit"), cnt=Count("id")),
+            "4010": JournalItem.objects.filter(journal_entry__academic_year=academic_year, account__code__startswith="4010").aggregate(dr=Sum("debit"), cr=Sum("credit"), cnt=Count("id")),
+            "4030": JournalItem.objects.filter(journal_entry__academic_year=academic_year, account__code__startswith="4030").aggregate(dr=Sum("debit"), cr=Sum("credit"), cnt=Count("id")),
+        }
+
+        results = []
+        for acc in accounts:
+            row = agg_map.get(acc.id, {})
+            dr = row.get("total_dr") or Decimal("0.00")
+            cr = row.get("total_cr") or Decimal("0.00")
+            tx_count = row.get("txn_count") or 0
+
+            # Master Control Account Roll-up
+            if acc.code in ctrl_aggs:
+                c_item = ctrl_aggs[acc.code]
+                c_dr = c_item["dr"] or Decimal("0.00")
+                c_cr = c_item["cr"] or Decimal("0.00")
+                c_tx = c_item["cnt"] or 0
+                if c_tx > 0:
+                    dr = c_dr
+                    cr = c_cr
+                    tx_count = c_tx
+
+            # Roll up active late fee penalties into 4030 if no explicit journal entries exist
+            if acc.code == "4030" and tx_count == 0 and active_late_penalties > 0:
+                dr = Decimal("0.00")
+                cr = active_late_penalties
+                tx_count = overdue_cnt
+
+            # Normal balance: ASSET/EXPENSE = Dr - Cr; LIABILITY/EQUITY/INCOME = Cr - Dr
+            if acc.account_type in ("ASSET", "EXPENSE"):
+                net = dr - cr
+            else:
+                net = cr - dr
+
+            meta = self.COA_METADATA.get(acc.code)
+            if not meta:
+                if acc.code.startswith("1100-"):
+                    st_name = acc.student.student_name if acc.student else "Student"
+                    meta = {
+                        "type": "Asset",
+                        "purpose": f"Sub-ledger receivable for {st_name} (#{acc.student_id})"
+                    }
+                else:
+                    type_str = "Contra-Income" if (acc.account_type == "EXPENSE" and "Concession" in acc.name) else acc.account_type.capitalize()
+                    meta = {"type": type_str, "purpose": f"{acc.name} Ledger Account"}
+
+            results.append({
+                "id": acc.id,
+                "code": acc.code,
+                "name": acc.name,
+                "account_type": acc.account_type,
+                "type_label": meta["type"],
+                "purpose": meta["purpose"],
+                "student_id": acc.student_id,
+                "student_name": acc.student.student_name if acc.student else None,
+                "total_debit": str(dr),
+                "total_credit": str(cr),
+                "net_balance": str(net),
+                "transaction_count": tx_count,
+                "is_active": acc.is_active,
+                "created_at": acc.created_at.strftime("%d-%b-%Y")
+            })
+
+        import math
+        total_accounts = len(results)
+        if page and str(page).lower() != "all":
+            p = max(1, int(page))
+            ps = max(1, int(page_size))
+            start = (p - 1) * ps
+            end = start + ps
+            return Response({
+                "count": total_accounts,
+                "page": p,
+                "page_size": ps,
+                "total_pages": max(1, math.ceil(total_accounts / ps)),
+                "results": results[start:end]
+            })
+
+        return Response(results)
+
+
+class ManagementAccountDetailsView(APIView):
+    """
+    Management API: Returns an account's detail with all its journal entries/items and running balance.
+    Fast database aggregation + server-side pagination for optimal performance.
+    """
+    COA_METADATA = {
+        "1010": {"type": "Asset", "purpose": "Cash held by fee desk operators"},
+        "1020": {"type": "Asset", "purpose": "Direct bank transfers or UPI payments"},
+        "1100": {"type": "Asset", "purpose": "What parents owe the school (Sub-ledger per student)"},
+        "4010": {"type": "Income", "purpose": "Earned quarterly tuition income"},
+        "4020": {"type": "Income", "purpose": "Cultural, sports, event fees"},
+        "4030": {"type": "Income", "purpose": "₹100 / ₹500 penalties"},
+        "4090": {"type": "Contra-Income", "purpose": "10% discount on annual upfront pay"},
+    }
+
+    def get(self, request, pk):
+        account = get_object_or_404(Account.objects.select_related("student"), pk=pk)
+        academic_year = request.query_params.get("academic_year", "2026-2027")
+        page = request.query_params.get("page")
+        page_size = int(request.query_params.get("page_size", 25))
+
+        if account.code == "1100":
+            items_qs = JournalItem.objects.filter(
+                Q(account=account) | Q(account__code__startswith="1100-"),
+                journal_entry__academic_year=academic_year
+            ).select_related("journal_entry", "student", "student__fee_class").order_by("journal_entry__date", "id")
+        else:
+            items_qs = JournalItem.objects.filter(
+                account=account,
+                journal_entry__academic_year=academic_year
+            ).select_related("journal_entry", "student", "student__fee_class").order_by("journal_entry__date", "id")
+
+        # Fast DB aggregate
+        db_aggs = items_qs.aggregate(
+            total_dr=Sum("debit"),
+            total_cr=Sum("credit"),
+            cnt=Count("id")
+        )
+        total_dr = db_aggs["total_dr"] or Decimal("0.00")
+        total_cr = db_aggs["total_cr"] or Decimal("0.00")
+        total_count = db_aggs["cnt"] or 0
+
+        if account.account_type in ("ASSET", "EXPENSE"):
+            net_balance = total_dr - total_cr
+        else:
+            net_balance = total_cr - total_dr
+
+        # Compute running balances
+        items = list(items_qs)
+        running_bal = Decimal("0.00")
+        entries = []
+        for it in items:
+            dr = it.debit or Decimal("0.00")
+            cr = it.credit or Decimal("0.00")
+            if account.account_type in ("ASSET", "EXPENSE"):
+                running_bal += (dr - cr)
+            else:
+                running_bal += (cr - dr)
+
+            ist_time = timezone.localtime(it.journal_entry.created_at)
+            st_name = it.student.student_name if it.student else ""
+            cls_name = f"{it.student.fee_class.name} ({it.student.fee_class.section})" if (it.student and it.student.fee_class) else ""
+
+            entries.append({
+                "id": it.id,
+                "journal_entry_id": it.journal_entry_id,
+                "entry_number": it.journal_entry.entry_number,
+                "date": it.journal_entry.date.strftime("%d-%b-%Y"),
+                "time": ist_time.strftime("%I:%M %p"),
+                "narration": it.journal_entry.narration,
+                "reference_type": it.journal_entry.reference_type,
+                "receipt_number": it.journal_entry.receipt_number or "",
+                "student_id": it.student_id,
+                "student_name": st_name,
+                "class_name": cls_name,
+                "debit": str(dr),
+                "credit": str(cr),
+                "running_balance": str(running_bal),
+            })
+
+        # Roll up active late fee penalties for 4030 detail view
+        if account.code == "4030" and total_count == 0:
+            defaulters_data = get_all_students_quarterly_defaulters(academic_year=academic_year, only_late=True)
+            active_late_penalties = Decimal(str(defaulters_data.get("total_penalties") or defaulters_data.get("total_late_penalties") or "0.00"))
+            if active_late_penalties > 0:
+                total_cr = active_late_penalties
+                net_balance = active_late_penalties
+                total_count = defaulters_data.get("overdue_students_count", 0)
+                running_bal = Decimal("0.00")
+                entries = []
+                for s_item in (defaulters_data.get("defaulters") or defaulters_data.get("students") or []):
+                    p_amt = Decimal(str(s_item.get("late_penalty", "0.00")))
+                    if p_amt <= 0:
+                        continue
+                    running_bal += p_amt
+                    entries.append({
+                        "id": f"penalty-{s_item['student_id']}",
+                        "journal_entry_id": None,
+                        "entry_number": f"PEN-2026-{s_item['student_id']:04d}",
+                        "date": "10-Nov-2026",
+                        "time": "11:59 PM",
+                        "narration": f"Q3 Overdue Late Fee Penalty ({s_item.get('penalty_reason', 'Past 10th cutoff')})",
+                        "reference_type": "LATE_FEE_PENALTY",
+                        "receipt_number": "",
+                        "student_id": s_item["student_id"],
+                        "student_name": s_item["student_name"],
+                        "class_name": s_item.get("class_name", ""),
+                        "debit": "0.00",
+                        "credit": str(p_amt),
+                        "running_balance": str(running_bal),
+                    })
+
+        meta = self.COA_METADATA.get(account.code)
+        if not meta:
+            if account.code.startswith("1100-"):
+                st_name = account.student.student_name if account.student else "Student"
+                meta = {
+                    "type": "Asset",
+                    "purpose": f"Sub-ledger receivable for {st_name} (#{account.student_id})"
+                }
+            else:
+                type_str = "Contra-Income" if (account.account_type == "EXPENSE" and "Concession" in account.name) else account.account_type.capitalize()
+                meta = {"type": type_str, "purpose": f"{account.name} Ledger Account"}
+
+        account_info = {
+            "id": account.id,
+            "code": account.code,
+            "name": account.name,
+            "account_type": account.account_type,
+            "type_label": meta["type"],
+            "purpose": meta["purpose"],
+            "student_name": account.student.student_name if account.student else None,
+            "total_debit": str(total_dr),
+            "total_credit": str(total_cr),
+            "net_balance": str(net_balance),
+            "transaction_count": total_count,
+        }
+
+        import math
+        if page and str(page).lower() != "all":
+            p = max(1, int(page))
+            ps = max(1, int(page_size))
+            start = (p - 1) * ps
+            end = start + ps
+            paginated_entries = entries[start:end]
+            return Response({
+                "account": account_info,
+                "pagination": {
+                    "page": p,
+                    "page_size": ps,
+                    "total_pages": max(1, math.ceil(total_count / ps)),
+                    "total_count": total_count,
+                },
+                "entries": paginated_entries
+            })
+
+        return Response({
+            "account": account_info,
+            "pagination": {
+                "page": 1,
+                "page_size": total_count,
+                "total_pages": 1,
+                "total_count": total_count,
+            },
+            "entries": entries
+        })
+
 
 class ManagementFeeSlabListCreateView(APIView):
     """
@@ -73,8 +529,6 @@ class ManagementFeeSlabDetailView(APIView):
 class ManagementPostQuarterlyFeesView(APIView):
     """
     Management API: Post quarterly tuition fees to student ledger for all classes in a slab.
-    Fee slabs apply to all quarters across the academic year.
-    Supports posting a specific quarter (Q1, Q2, Q3, Q4) or ALL quarters at once.
     Creates Double-Entry Journal Entries:
       Debit: 1100-{student_id} Student Receivable
       Credit: 4010 Tuition Fee Revenue
@@ -111,7 +565,7 @@ class ManagementPostQuarterlyFeesView(APIView):
                     if not classes.exists():
                         continue
 
-                    students = list(Student.objects.filter(school_class__in=classes))
+                    students = list(FeeStudent.objects.filter(fee_class__in=classes))
                     q_fee = slab.quarterly_fee
                     if not students or q_fee <= 0:
                         continue
@@ -136,7 +590,8 @@ class ManagementPostQuarterlyFeesView(APIView):
                                     {"account": st_rec_acc, "student": st, "debit": q_fee, "credit": Decimal("0.00")},
                                     {"account": tuition_revenue, "student": None, "debit": Decimal("0.00"), "credit": q_fee},
                                 ]
-                                narration = f"{q} Tuition Fee billed for {st.student_name} ({st.school_class})"
+                                cls_display = f"{st.fee_class.name} ({st.fee_class.section})" if (st.fee_class and st.fee_class.section) else (st.fee_class.name if st.fee_class else "")
+                                narration = f"{q} Tuition Fee billed for {st.student_name} ({cls_display})"
                                 post_journal_entry(
                                     date_val=timezone.now().date(),
                                     narration=narration,
@@ -150,10 +605,10 @@ class ManagementPostQuarterlyFeesView(APIView):
                             total_posted += 1
                             total_amount += q_fee
 
-                # Synchronize live student.fees_due column from dynamic ledger balance
+                # Synchronize live FeeStudent.fees_due column from dynamic ledger balance
                 for st_id in impacted_student_ids:
                     live_due = get_student_due_balance(st_id, academic_year=academic_year)
-                    Student.objects.filter(id=st_id).update(fees_due=live_due)
+                    FeeStudent.objects.filter(id=st_id).update(fees_due=live_due)
 
             return Response({
                 "message": f"Successfully posted {', '.join(quarters_to_post)} fees ({total_posted} entries).",
@@ -176,13 +631,23 @@ class ManagementJournalEntriesListView(APIView):
         ref_type = request.query_params.get("reference_type")
         student_id = request.query_params.get("student_id")
 
-        qs = JournalEntry.objects.filter(academic_year=academic_year).prefetch_related("items", "items__account")
+        qs = JournalEntry.objects.filter(academic_year=academic_year).prefetch_related("items", "items__account", "items__student")
         if ref_type:
             qs = qs.filter(reference_type=ref_type)
         if student_id:
             qs = qs.filter(items__student_id=student_id).distinct()
 
-        serializer = JournalEntrySerializer(qs[:100], many=True)
+        serializer = JournalEntrySerializer(qs[:150], many=True)
+        return Response(serializer.data)
+
+
+class ManagementJournalEntryDetailView(APIView):
+    """
+    Management API: Return single Journal Entry with all balanced legs.
+    """
+    def get(self, request, pk):
+        je = get_object_or_404(JournalEntry.objects.prefetch_related("items", "items__account", "items__student"), pk=pk)
+        serializer = JournalEntrySerializer(je)
         return Response(serializer.data)
 
 
@@ -192,22 +657,28 @@ class ManagementJournalEntriesListView(APIView):
 
 class OperatorStudentFeeSummaryView(APIView):
     """
-    Operator API: Check live due fees, penalty status, and parent details for a student.
+    Operator API: Check live due fees, penalty status, and parent details for a FeeStudent.
     Uses dynamic double-entry calculation (Debit - Credit).
+    Supports optional as_of_date / payment_date and waive_penalty for transition offline payments.
     """
     def get(self, request, student_id):
-        student = get_object_or_404(Student.objects.select_related("school_class"), id=student_id)
+        student = get_object_or_404(FeeStudent.objects.select_related("fee_class"), id=student_id)
         quarter = request.query_params.get("quarter", "Q3")
         academic_year = request.query_params.get("academic_year", "2026-2027")
-        current_due = get_student_due_balance(student.id, academic_year=academic_year)
+        payment_date_str = request.query_params.get("payment_date") or request.query_params.get("as_of_date")
+        waive_penalty = request.query_params.get("waive_penalty", "false").lower() in ("true", "1", "yes")
 
-        penalty_amount, penalty_reason = calculate_late_penalty(
-            student_id=student.id, quarter=quarter, academic_year=academic_year
-        )
+        as_of_date_obj = None
+        if payment_date_str:
+            try:
+                from datetime import datetime
+                as_of_date_obj = datetime.strptime(str(payment_date_str).strip()[:10], "%Y-%m-%d").date()
+            except Exception:
+                pass
 
         slab = None
-        if student.school_class:
-            slab_obj = FeeSlab.objects.filter(classes=student.school_class, is_active=True).first()
+        if student.fee_class:
+            slab_obj = FeeSlab.objects.filter(classes=student.fee_class, is_active=True).first()
             if slab_obj:
                 slab = {
                     "id": slab_obj.id,
@@ -215,7 +686,16 @@ class OperatorStudentFeeSummaryView(APIView):
                     "quarterly_fee": str(slab_obj.quarterly_fee)
                 }
 
-        breakdown = get_student_quarterly_fee_breakdown(student.id, academic_year=academic_year)
+        breakdown = get_student_quarterly_fee_breakdown(student.id, academic_year=academic_year, as_of_date=as_of_date_obj)
+
+        if waive_penalty:
+            breakdown["total_penalty"] = Decimal("0.00")
+            breakdown["penalty_reason"] = "Late fee waived (On-time offline / pre-portal payment)"
+            breakdown["grand_total_payable"] = breakdown["total_base_due"]
+            for q_it in breakdown["quarters"]:
+                q_it["penalty"] = Decimal("0.00")
+                q_it["penalty_reason"] = "Late fee waived (On-time offline / pre-portal payment)"
+                q_it["total_with_penalty"] = q_it["due"]
 
         # Quarter-specific calculations
         target_q = (quarter or "").upper()
@@ -239,22 +719,31 @@ class OperatorStudentFeeSummaryView(APIView):
             quarter_name = q_item["name"] if q_item else target_q
             penalty_reason = q_item["penalty_reason"] if (q_item and q_item["penalty_reason"]) else breakdown["penalty_reason"]
 
-        # Keep student table's fees_due column in sync with the live ledger (dues till current date)
+        if waive_penalty:
+            quarter_penalty = Decimal("0.00")
+            penalty_reason = "Late fee waived (On-time offline / pre-portal payment)"
+            quarter_payable = quarter_base_due
+
+        # Keep FeeStudent table's fees_due column in sync with the live ledger
         if student.fees_due != breakdown["due_till_now"]:
-            Student.objects.filter(id=student.id).update(fees_due=breakdown["due_till_now"])
+            FeeStudent.objects.filter(id=student.id).update(fees_due=breakdown["due_till_now"])
+
+        cls_display = f"{student.fee_class.name} - {student.fee_class.section}" if (student.fee_class and student.fee_class.section) else (student.fee_class.name if student.fee_class else "N/A")
 
         return Response({
             "student_id": student.id,
             "student_name": student.student_name,
             "parent_name": student.parent_name,
             "whatsapp_number": student.whatsapp_number,
-            "class_name": f"{student.school_class.name} - {student.school_class.section}" if student.school_class and student.school_class.section else (student.school_class.name if student.school_class else "N/A"),
+            "class_name": cls_display,
             "current_due": str(quarter_base_due),
             "total_ledger_due": str(breakdown["due_till_now"]),
             "annual_ledger_due": str(breakdown["total_base_due"]),
             "quarter_base_due": str(quarter_base_due),
             "quarter_name": quarter_name,
             "selected_quarter": target_q,
+            "as_of_date": as_of_date_obj.strftime("%Y-%m-%d") if as_of_date_obj else None,
+            "waive_penalty": waive_penalty,
             "fee_slab": slab,
             "penalty": {
                 "amount": str(quarter_penalty),
@@ -275,6 +764,7 @@ class OperatorSendCashPaymentOTPView(APIView):
     """
     Operator API: Step 1 of Cash Collection.
     Initiates cash transaction -> Generates 6-digit OTP -> Dispatches via WhatsApp Template.
+    Supports actual offline payment_date and waive_penalty for transition period flexibility.
     """
     def post(self, request):
         student_id = request.data.get("student_id")
@@ -282,6 +772,8 @@ class OperatorSendCashPaymentOTPView(APIView):
         quarter = request.data.get("quarter", "Q1")
         academic_year = request.data.get("academic_year", "2026-2027")
         operator_name = request.data.get("operator_name", "Counter Operator")
+        payment_date = request.data.get("payment_date")
+        waive_penalty = bool(request.data.get("waive_penalty", False))
 
         if not student_id or not amount:
             return Response({"error": "student_id and amount are required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -289,65 +781,74 @@ class OperatorSendCashPaymentOTPView(APIView):
         try:
             amount_dec = Decimal(str(amount))
             if amount_dec <= 0:
-                return Response({"error": "Amount must be greater than zero."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "Payment amount must be greater than zero."}, status=status.HTTP_400_BAD_REQUEST)
 
-            student = get_object_or_404(Student, id=student_id)
-            if not student.whatsapp_number:
-                return Response({"error": "Student has no registered WhatsApp/mobile number."}, status=status.HTTP_400_BAD_REQUEST)
+            student = get_object_or_404(FeeStudent, id=student_id)
 
-            # Generate OTP Session
             session = generate_counter_payment_otp(
                 student_id=student.id,
                 amount=amount_dec,
                 operator_name=operator_name,
                 quarter=quarter,
-                academic_year=academic_year
+                academic_year=academic_year,
+                payment_date=payment_date,
+                waive_penalty=waive_penalty
             )
 
-            # Send OTP to Parent's WhatsApp via Template or Direct Text
-            otp_sent_status = "SENT"
+            # Local Indian Standard Time (IST) formatting
+            ist_now = timezone.localtime(timezone.now())
+            ist_date_str = ist_now.strftime("%d-%b-%Y %I:%M %p")
+
             whatsapp_err = None
             try:
                 from asgiref.sync import async_to_sync
+                from api.models import MessageLog
                 amt_str = str(int(amount_dec) if amount_dec % 1 == 0 else amount_dec)
-                # 1. Attempt sending official Meta Template 'fee_payment_update_v1'
-                # {{1}} = Amount, {{2}} = Student Name, {{3}} = OTP Code
+                # Official approved Meta utility template for cash payment processing OTP
+                # {{1}} = Amount, {{2}} = Student Name, {{3}} = OTP / Transaction Ref
+                target_otp_template = "fee_payment_update_v1"
                 res = async_to_sync(whatsapp_service.send_template_message)(
                     recipient_number=student.whatsapp_number,
-                    template_name="fee_payment_update_v1",
+                    template_name=target_otp_template,
                     language_code="en_US",
-                    parameters=[
-                        amt_str,
-                        student.student_name,
-                        str(session.otp_code)
-                    ]
+                    parameters=[amt_str, student.student_name, str(session.otp_code)]
                 )
-                if not res.get("success"):
-                    logger.warning(f"[Fee OTP] Template dispatch fallback to direct message: {res.get('error')}")
-                    otp_msg = (
-                        f"🔐 School Fee Payment Verification\n\n"
-                        f"Your verification code is: *{session.otp_code}*\n\n"
-                        f"For cash payment of ₹{amount_dec} for student {student.student_name}. "
-                        f"Valid for 5 minutes."
-                    )
-                    fallback_res = async_to_sync(whatsapp_service.send_text_message)(
-                        recipient_number=student.whatsapp_number,
-                        message_text=otp_msg
-                    )
-                    if not fallback_res.get("success"):
-                        whatsapp_err = res.get("error") or fallback_res.get("error")
+                succ = res.get("success", False)
+                wamid = res.get("message_id")
+                if not succ:
+                    whatsapp_err = res.get("error", "Failed to dispatch WhatsApp template.")
+                    logger.warning(f"[Fee OTP] Template {target_otp_template} dispatch failed: {whatsapp_err}")
                 else:
-                    logger.info(f"[Fee OTP] Template fee_payment_update_v1 sent successfully to {student.whatsapp_number}")
-            except Exception as wa_ex:
-                logger.warning(f"[Fee OTP] WhatsApp dispatch warning: {wa_ex}")
-                whatsapp_err = str(wa_ex)
+                    logger.info(f"[Fee OTP] Successfully sent OTP template {target_otp_template} to {student.whatsapp_number} (wamid: {wamid})")
+
+                # Record in MessageLog
+                try:
+                    MessageLog.objects.create(
+                        recipient_number=student.whatsapp_number,
+                        student_name=student.student_name,
+                        class_name=student.fee_class.name if student.fee_class else None,
+                        section=student.fee_class.section if student.fee_class else None,
+                        template_name=target_otp_template,
+                        status="SENT" if succ else "FAILED",
+                        whatsapp_message_id=wamid,
+                        error_message=res.get("error") if not succ else None,
+                        sent_at=timezone.now() if succ else None,
+                        failed_at=timezone.now() if not succ else None,
+                    )
+                except Exception as ml_err:
+                    logger.warning(f"[Fee OTP] Failed to write MessageLog: {ml_err}")
+
+            except Exception as wa_err:
+                whatsapp_err = str(wa_err)
+                logger.warning(f"[Fee OTP] WhatsApp dispatch notice: {wa_err}")
 
             return Response({
                 "message": "OTP generated and dispatched to parent's WhatsApp.",
                 "session_id": str(session.session_id),
-                "student_name": student.student_name,
                 "parent_phone_masked": f"******{student.whatsapp_number[-4:]}" if len(student.whatsapp_number) >= 4 else student.whatsapp_number,
                 "amount": str(amount_dec),
+                "payment_date": payment_date,
+                "waive_penalty": waive_penalty,
                 "expires_in_seconds": 300,
                 "whatsapp_warning": whatsapp_err
             }, status=status.HTTP_201_CREATED)
@@ -361,11 +862,14 @@ class OperatorVerifyPaymentOTPView(APIView):
     """
     Operator API: Step 2 of Cash Collection.
     Validates OTP -> Commits to Double-Entry Ledger -> Issues Official Receipt.
+    Respects actual payment_date and waive_penalty for historical offline payments.
     """
     def post(self, request):
         session_id = request.data.get("session_id")
         input_otp = request.data.get("otp_code")
         operator_name = request.data.get("operator_name", "Counter Operator")
+        payment_date = request.data.get("payment_date")
+        waive_penalty = request.data.get("waive_penalty")
 
         if not session_id or not input_otp:
             return Response({"error": "session_id and otp_code are required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -374,37 +878,55 @@ class OperatorVerifyPaymentOTPView(APIView):
             session, receipt_number = verify_counter_payment_otp_and_commit(
                 session_id=session_id,
                 input_otp=input_otp,
-                operator_name=operator_name
+                operator_name=operator_name,
+                payment_date=payment_date,
+                waive_penalty=waive_penalty
             )
 
             student = session.student
-            breakdown = get_student_quarterly_fee_breakdown(student.id, academic_year=session.academic_year)
-            # Find the remaining due for the specific quarter that was paid for
+            date_obj = None
+            if payment_date:
+                try:
+                    from datetime import datetime
+                    date_obj = datetime.strptime(str(payment_date).strip()[:10], "%Y-%m-%d").date()
+                except Exception:
+                    pass
+            elif session.journal_entry and session.journal_entry.date:
+                date_obj = session.journal_entry.date
+
+            breakdown = get_student_quarterly_fee_breakdown(
+                student.id,
+                academic_year=session.academic_year,
+                as_of_date=date_obj
+            )
             q_item = next((item for item in breakdown["quarters"] if item["quarter"] == session.quarter), None)
             quarter_due = q_item["due"] if q_item else Decimal("0.00")
             quarter_penalty = q_item["penalty"] if q_item else Decimal("0.00")
 
-            # If quarter has remaining balance, display that quarter's balance; otherwise show due till now balance
+            is_waived = bool(waive_penalty) if waive_penalty is not None else ("WAIVE:1" in (session.collected_by or ""))
+
             remaining_bal = quarter_due if (quarter_due > 0 and session.quarter not in ("ANNUAL", "ALL", "TILL_NOW")) else breakdown["due_till_now"]
-            late_penalty = quarter_penalty if (quarter_due > 0 and session.quarter not in ("ANNUAL", "ALL", "TILL_NOW")) else breakdown["total_penalty"]
+            late_penalty = Decimal("0.00") if is_waived else (quarter_penalty if (quarter_due > 0 and session.quarter not in ("ANNUAL", "ALL", "TILL_NOW")) else breakdown["total_penalty"])
             total_due_with_late_fees = remaining_bal + late_penalty
 
-            # Synchronize student.fees_due column so all pages show updated balance immediately
-            Student.objects.filter(id=student.id).update(fees_due=breakdown["due_till_now"])
+            # Synchronize FeeStudent.fees_due column
+            FeeStudent.objects.filter(id=student.id).update(fees_due=breakdown["due_till_now"])
 
-            # Local Indian Standard Time (IST) formatting
             ist_now = timezone.localtime(timezone.now())
-            ist_date_str = ist_now.strftime("%d-%b-%Y %I:%M %p")
+            receipt_date_str = session.journal_entry.date.strftime("%d-%b-%Y") if (session.journal_entry and session.journal_entry.date) else ist_now.strftime("%d-%b-%Y %I:%M %p")
 
             try:
                 from asgiref.sync import async_to_sync
+                from api.models import MessageLog
                 paid_str = str(int(session.amount) if session.amount % 1 == 0 else session.amount)
                 rem_str = str(int(total_due_with_late_fees) if total_due_with_late_fees % 1 == 0 else total_due_with_late_fees)
-                # 1. Attempt sending official Meta Template 'fee_payment_receipt_v1'
-                # {{1}} = Amount Paid, {{2}} = Student Name, {{3}} = Receipt No, {{4}} = Remaining Dues
+
+                # Approved Meta utility template for official cash receipt confirmation
+                # {{1}} = Amount, {{2}} = Student Name, {{3}} = Receipt No, {{4}} = Updated Balance
+                target_receipt_template = "fee_receipt_confirmation_v1"
                 res = async_to_sync(whatsapp_service.send_template_message)(
                     recipient_number=student.whatsapp_number,
-                    template_name="fee_payment_receipt_v1",
+                    template_name=target_receipt_template,
                     language_code="en_US",
                     parameters=[
                         paid_str,
@@ -413,25 +935,30 @@ class OperatorVerifyPaymentOTPView(APIView):
                         rem_str
                     ]
                 )
-                if not res.get("success"):
-                    logger.warning(f"[Fee Receipt] Template dispatch fallback to direct message: {res.get('error')}")
-                    receipt_msg = (
-                        f"✅ *FEE PAYMENT RECEIPT*\n"
-                        f"School Fee Counter\n\n"
-                        f"Receipt No: *{receipt_number}*\n"
-                        f"Student: *{student.student_name}*\n"
-                        f"Amount Received: *₹{session.amount}* (Cash)\n"
-                        f"Quarter: *{session.quarter}* ({session.academic_year})\n"
-                        f"Date: *{ist_date_str}*\n\n"
-                        f"Remaining Balance (with Late Fee): ₹{total_due_with_late_fees}\n\n"
-                        f"Thank you! Your payment is safely recorded."
-                    )
-                    async_to_sync(whatsapp_service.send_text_message)(
-                        recipient_number=student.whatsapp_number,
-                        message_text=receipt_msg
-                    )
+                succ = res.get("success", False)
+                wamid = res.get("message_id")
+                if not succ:
+                    logger.warning(f"[Fee Receipt] Template {target_receipt_template} dispatch failed ({res.get('error')})")
                 else:
-                    logger.info(f"[Fee Receipt] Template fee_payment_receipt_v1 sent successfully to {student.whatsapp_number}")
+                    logger.info(f"[Fee Receipt] Successfully sent receipt via template {target_receipt_template} to {student.whatsapp_number} (wamid: {wamid})")
+
+                # Record in MessageLog
+                try:
+                    MessageLog.objects.create(
+                        recipient_number=student.whatsapp_number,
+                        student_name=student.student_name,
+                        class_name=student.fee_class.name if student.fee_class else None,
+                        section=student.fee_class.section if student.fee_class else None,
+                        template_name=target_receipt_template,
+                        status="SENT" if succ else "FAILED",
+                        whatsapp_message_id=wamid,
+                        error_message=res.get("error") if not succ else None,
+                        sent_at=timezone.now() if succ else None,
+                        failed_at=timezone.now() if not succ else None,
+                    )
+                except Exception as ml_err:
+                    logger.warning(f"[Fee Receipt] Failed to write MessageLog: {ml_err}")
+
             except Exception as rc_err:
                 logger.warning(f"[Fee Receipt] Receipt WhatsApp confirmation note: {rc_err}")
 
@@ -444,7 +971,7 @@ class OperatorVerifyPaymentOTPView(APIView):
                 "late_penalty": str(late_penalty),
                 "new_due_balance": str(total_due_with_late_fees),
                 "total_due_with_late_fees": str(total_due_with_late_fees),
-                "date": ist_date_str,
+                "date": receipt_date_str,
                 "status": "VERIFIED"
             })
 
@@ -455,43 +982,98 @@ class OperatorVerifyPaymentOTPView(APIView):
             return Response({"error": str(ex)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class OperatorRecordOfflinePaymentView(APIView):
+    """
+    Operator API: Direct record of an offline / pre-portal fee payment without OTP.
+    Used for students who already paid offline before or during transition period.
+    """
+    def post(self, request):
+        student_id = request.data.get("student_id")
+        amount = request.data.get("amount")
+        quarter = request.data.get("quarter", "Q3")
+        academic_year = request.data.get("academic_year", "2026-2027")
+        payment_date = request.data.get("payment_date")
+        payment_mode = request.data.get("payment_mode", "CASH")
+        receipt_number = request.data.get("receipt_number", "")
+        waive_raw = request.data.get("waive_penalty")
+        waive_penalty = True if waive_raw is None else (str(waive_raw).lower() in ("true", "1", "yes"))
+        operator_name = request.data.get("operator_name", "Fee Counter Operator")
+
+        if not student_id or not amount:
+            return Response({"error": "student_id and amount are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            session, receipt_no, breakdown = record_offline_direct_payment(
+                student_id=student_id,
+                amount=amount,
+                quarter=quarter,
+                academic_year=academic_year,
+                payment_date=payment_date,
+                payment_mode=payment_mode,
+                offline_receipt_number=receipt_number,
+                waive_penalty=waive_penalty,
+                operator_name=operator_name
+            )
+
+            student = session.student
+            date_str = session.journal_entry.date.strftime("%d-%b-%Y") if session.journal_entry else str(payment_date)
+            return Response({
+                "message": f"Offline payment of ₹{session.amount} recorded successfully for {student.student_name}.",
+                "receipt_number": receipt_no,
+                "student_id": student.id,
+                "student_name": student.student_name,
+                "amount_paid": str(session.amount),
+                "remaining_due": str(breakdown["due_till_now"]),
+                "payment_date": date_str,
+                "status": "VERIFIED"
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"[Record Offline Payment Error] {e}", exc_info=True)
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class OperatorDefaultersListView(APIView):
     """
     Operator API: Live Due Fees & Overdue Defaulters List.
     High performance bulk aggregation - resolves in < 50ms with zero timeouts!
     """
     def get(self, request):
-        quarter = request.query_params.get("quarter", "ALL").upper()
+        quarter = request.query_params.get("quarter", "TILL_NOW").upper()
         academic_year = request.query_params.get("academic_year", "2026-2027")
         only_late = request.query_params.get("only_late", "false").lower() in ("true", "1", "yes")
         class_id = request.query_params.get("class_id")
-        search = request.query_params.get("search", "").strip()
+        search = request.query_params.get("search")
+        page = request.query_params.get("page")
+        page_size = request.query_params.get("page_size", 25)
 
-        data = get_all_students_quarterly_defaulters(
+        defaulters_data = get_all_students_quarterly_defaulters(
             academic_year=academic_year,
             class_id=class_id,
             search=search,
             only_late=only_late,
-            quarter=quarter
+            quarter=quarter,
+            page=page,
+            page_size=page_size,
         )
-        return Response(data)
+
+        return Response(defaulters_data)
 
 
 class OperatorStudentPassbookView(APIView):
     """
-    Operator API: Chronological Bank-style Passbook of all financial events for a student.
+    Operator API: Chronological Bank-style Passbook of all financial events for a FeeStudent.
     Shows exact date, time, particulars, reference/receipt number, Debit (Billed), Credit (Paid),
     and the live Running Balance after every entry.
     """
     def get(self, request, student_id):
         try:
             academic_year = request.query_params.get("academic_year", "2026-2027")
-            student = get_object_or_404(Student.objects.select_related("school_class"), id=student_id)
+            student = get_object_or_404(FeeStudent.objects.select_related("fee_class"), id=student_id)
 
             breakdown = get_student_quarterly_fee_breakdown(student.id, academic_year=academic_year)
             base_year = int(academic_year[:4]) if academic_year and academic_year[:4].isdigit() else timezone.now().year
 
-            # Quarter billing dates for chronological sorting
             quarter_dates = {
                 "Q1": timezone.datetime(base_year, 4, 1, 9, 0, tzinfo=timezone.get_current_timezone()),
                 "Q2": timezone.datetime(base_year, 7, 1, 9, 0, tzinfo=timezone.get_current_timezone()),
@@ -501,8 +1083,7 @@ class OperatorStudentPassbookView(APIView):
 
             events = []
 
-            # 1. Billing entries from Fee Breakdown
-            # Only include commenced quarters dynamically (when today >= quarter start date)!
+            # 1. Billing entries for commenced quarters only
             commenced_billed_sum = Decimal("0.00")
             for q in breakdown["quarters"]:
                 q_billed = Decimal(str(q.get("billed", "0.00")))
@@ -512,7 +1093,6 @@ class OperatorStudentPassbookView(APIView):
                     q_code = q["quarter"]
                     b_date = quarter_dates.get(q_code, timezone.now())
 
-                    # Check if formal JournalEntry exists for reference number
                     je = JournalEntry.objects.filter(
                         academic_year=academic_year,
                         quarter=q_code,
@@ -560,7 +1140,7 @@ class OperatorStudentPassbookView(APIView):
                     "status": "VERIFIED (WhatsApp OTP)"
                 })
 
-            # 3. Overdue late fee penalties
+            # 3. Overdue late fee penalties for commenced quarters
             penalty_cutoffs = {
                 "Q1": timezone.datetime(base_year, 5, 10, 23, 59, tzinfo=timezone.get_current_timezone()),
                 "Q2": timezone.datetime(base_year, 8, 10, 23, 59, tzinfo=timezone.get_current_timezone()),
@@ -589,10 +1169,8 @@ class OperatorStudentPassbookView(APIView):
                         "status": "CHARGED"
                     })
 
-            # Sort chronologically by sort_key
             events.sort(key=lambda x: x["sort_key"])
 
-            # Compute running balance
             running_bal = Decimal("0.00")
             passbook_entries = []
             for ev in events:
@@ -602,7 +1180,9 @@ class OperatorStudentPassbookView(APIView):
                     "time": ev["time"],
                     "quarter": ev["quarter"],
                     "particulars": ev["particulars"],
+                    "description": ev["particulars"],
                     "reference_no": ev["reference_no"],
+                    "voucher_number": ev["reference_no"],
                     "type": ev["type"],
                     "debit": str(ev["debit"]),
                     "credit": str(ev["credit"]),
@@ -613,8 +1193,8 @@ class OperatorStudentPassbookView(APIView):
                 })
 
             cls_display = "N/A"
-            if student.school_class:
-                cls_display = f"{student.school_class.name} ({student.school_class.section})" if student.school_class.section else student.school_class.name
+            if student.fee_class:
+                cls_display = f"{student.fee_class.name} ({student.fee_class.section})" if student.fee_class.section else student.fee_class.name
 
             net_till_now_due = breakdown["due_till_now"] + breakdown["total_penalty"]
 

@@ -60,6 +60,7 @@ async function handleResponse(response) {
 }
 
 let _classesCache = null;
+let _feeClassesCache = null;
 let _templatesCache = null;
 
 export const api = {
@@ -548,6 +549,89 @@ export const api = {
     return handleResponse(res);
   },
 
+  async getFeeAccounts(params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/management/accounts`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async getFeeAccountDetails(id, params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/management/accounts/${id}`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async getJournalEntries(params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/management/journal-entries`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async getJournalEntryDetails(id) {
+    const res = await fetch(`${API_BASE}/api/fees/management/journal-entries/${id}`);
+    return handleResponse(res);
+  },
+
+  async getFeeStudents(params = {}) {
+    const url = new URL(`${API_BASE}/api/fees/management/students`, window.location.origin);
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== '') url.searchParams.append(k, params[k]);
+    });
+    const res = await fetch(url.pathname + url.search);
+    return handleResponse(res);
+  },
+
+  async createFeeStudent(data) {
+    const res = await fetch(`${API_BASE}/api/fees/management/students`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
+  async syncFeeStudentsRoster() {
+    const res = await fetch(`${API_BASE}/api/fees/management/students/sync-roster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    return handleResponse(res);
+  },
+
+  async getFeeClasses(forceRefresh = false) {
+    if (!forceRefresh && _feeClassesCache) {
+      return _feeClassesCache;
+    }
+    const res = await fetch(`${API_BASE}/api/fees/management/classes`);
+    const data = await handleResponse(res);
+    _feeClassesCache = data;
+    return data;
+  },
+
+  clearFeeClassesCache() {
+    _feeClassesCache = null;
+  },
+
+  async createFeeClass(data) {
+    _feeClassesCache = null;
+    const res = await fetch(`${API_BASE}/api/fees/management/classes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
   // ─── NEW FEE APP: Operator Section ────────────────────────────────────────
   async getOperatorStudentFeeSummary(studentId, params = {}) {
     const url = new URL(`${API_BASE}/api/fees/operator/student-summary/${studentId}`, window.location.origin);
@@ -576,6 +660,15 @@ export const api = {
     return handleResponse(res);
   },
 
+  async recordOfflinePayment(data) {
+    const res = await fetch(`${API_BASE}/api/fees/operator/record-offline-payment/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse(res);
+  },
+
   async getFeeDefaulters(params = {}) {
     const url = new URL(`${API_BASE}/api/fees/operator/defaulters/`, window.location.origin);
     Object.keys(params).forEach(k => {
@@ -594,4 +687,7 @@ export const api = {
     return handleResponse(res);
   },
 };
+
+export default api;
+
 

@@ -18,6 +18,7 @@ import { ComplaintsFeedbackPage } from './pages/ComplaintsFeedbackPage';
 import { ParentInboxPage } from './pages/ParentInboxPage';
 import { FeeManagementPage } from './pages/FeeManagementPage';
 import { FeeCounterPage } from './pages/FeeCounterPage';
+import { AccountsPage } from './pages/AccountsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -145,6 +146,12 @@ export function App() {
         return { title: 'Broadcast Campaigns', subtitle: 'Live status and history of classroom broadcasts' };
       case 'campaign-detail':
         return { title: `Campaign #${selectedCampaignId || ''}`, subtitle: 'Live message delivery breakdown' };
+      case 'accounts':
+        return { title: 'Chart of Accounts (COA) Structure', subtitle: 'Standard Chart of Accounts, General Ledger & Double-Entry Postings' };
+      case 'fee-counter':
+        return { title: 'Cash Collection & Receipt Desk', subtitle: 'Anti-fraud OTP verification & live cash receipting' };
+      case 'fee-management':
+        return { title: 'Fee Slabs & Schedulers', subtitle: 'Quarterly fee structures and billing automation' };
       case 'logs':
         return { title: 'Delivery Audit Logs', subtitle: 'Granular logs and WhatsApp message receipts' };
       case 'settings':
@@ -201,7 +208,11 @@ export function App() {
         <Header
           title={title}
           subtitle={subtitle}
-          onQuickSendClick={activeTab !== 'send-message' ? () => setActiveTab('send-message') : undefined}
+          onQuickSendClick={
+            !['accounts', 'fee-counter', 'fee-management'].includes(activeTab) && activeTab !== 'send-message'
+              ? () => setActiveTab('send-message')
+              : undefined
+          }
           onMenuToggle={() => setMobileMenuOpen((prev) => !prev)}
           currentUser={currentUser}
           onLogout={handleLogout}
@@ -213,6 +224,11 @@ export function App() {
             {activeTab === 'inbox' && (
               <ParentInboxPage
                 initialContact={selectedInboxContact}
+                showToast={addToast}
+              />
+            )}
+            {activeTab === 'accounts' && (
+              <AccountsPage
                 showToast={addToast}
               />
             )}

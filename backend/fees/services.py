@@ -14,8 +14,10 @@ from datetime import date
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Sum
-from .models import Account, JournalEntry, JournalItem, FeeSlab, FeePaymentSession
-from api.models import Student, Class
+from .models import Account, JournalEntry, JournalItem, FeeSlab, FeePaymentSession, FeeStudent, FeeClass
+# Alias dedicated models for full isolation from marketing Student/Class
+Student = FeeStudent
+Class = FeeClass
 import secrets
 import random
 import uuid
@@ -59,6 +61,58 @@ def get_or_create_student_receivable_account(student):
             is_active=True,
         )
     return acc
+
+
+def sync_roster_from_school_students():
+    """
+    Imports/syncs student records from api.Student into the dedicated FeeStudent model.
+    Does NOT touch api.Student or modify any marketing fees_due!
+    """
+    try:
+        from api.models import Student as MarketingStudent, Class as MarketingClass
+        # 1. Sync classes
+        m_classes = MarketingClass.objects.all()
+        class_map = {}
+        for mc in m_classes:
+            fc, _ = FeeClass.objects.get_or_create(
+                name=mc.name,
+                section=mc.section or "A",
+                defaults={"description": f"Fee Class {mc.name} ({mc.section or 'A'})"}
+            )
+            class_map[mc.id] = fc
+
+        # 2. Sync students
+        m_students = MarketingStudent.objects.all()
+        created_count = 0
+        updated_count = 0
+        for ms in m_students:
+            target_fee_class = class_map.get(ms.school_class_id)
+            fs = FeeStudent.objects.filter(student_name=ms.student_name, whatsapp_number=ms.whatsapp_number).first()
+            if not fs:
+                FeeStudent.objects.create(
+                    student_name=ms.student_name,
+                    parent_name=ms.parent_name or "",
+                    whatsapp_number=ms.whatsapp_number,
+                    fee_class=target_fee_class,
+                    admission_number=f"ADM-{ms.id:04d}",
+                )
+                created_count += 1
+            else:
+                if fs.fee_class != target_fee_class:
+                    fs.fee_class = target_fee_class
+                    fs.save(update_fields=["fee_class"])
+                    updated_count += 1
+
+        return {
+            "success": True,
+            "created": created_count,
+            "updated": updated_count,
+            "total_fee_students": FeeStudent.objects.count()
+        }
+    except Exception as e:
+        import logging
+        logging.getLogger("school_whatsapp").error(f"[sync_roster] Error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 def get_student_due_balance(student_id, academic_year="2026-2027"):
@@ -141,10 +195,10 @@ def get_student_quarterly_fee_breakdown(student_id, academic_year="2026-2027", a
         {"quarter": "Q4", "name": "Q4 (Jan - Mar)", "start_date": date(base_year + 1, 1, 1), "cutoff": date(base_year + 1, 2, 10)},
     ]
 
-    student = Student.objects.filter(id=student_id).select_related("school_class").first()
+    student = Student.objects.filter(id=student_id).select_related("fee_class").first()
     quarterly_slab_fee = Decimal("0.00")
-    if student and student.school_class:
-        slab = FeeSlab.objects.filter(classes=student.school_class, is_active=True).first()
+    if student and student.fee_class:
+        slab = FeeSlab.objects.filter(classes=student.fee_class, is_active=True).first()
         if slab:
             quarterly_slab_fee = slab.quarterly_fee
 
@@ -340,11 +394,12 @@ def calculate_late_penalty(student_id, quarter="Q1", academic_year="2026-2027", 
     return breakdown["total_penalty"], breakdown["penalty_reason"]
 
 
-def get_all_students_quarterly_defaulters(academic_year="2026-2027", class_id=None, search=None, only_late=False, quarter="ALL", as_of_date=None):
+def get_all_students_quarterly_defaulters(academic_year="2026-2027", class_id=None, search=None, only_late=False, quarter="ALL", as_of_date=None, page=None, page_size=25):
     """
     High-Performance Bulk Defaulters Query:
     Replaces N+1 query loop (which caused 504 Gateway Timeout) with exactly 3 bulk queries!
     Processes hundreds of students in < 50ms!
+    Supports pagination with global summary aggregates.
     """
     from collections import defaultdict
     from django.db.models import Q
@@ -361,9 +416,9 @@ def get_all_students_quarterly_defaulters(academic_year="2026-2027", class_id=No
     ]
 
     # Query 1: Fetch students
-    students_qs = Student.objects.select_related("school_class")
+    students_qs = Student.objects.select_related("fee_class")
     if class_id:
-        students_qs = students_qs.filter(school_class_id=class_id)
+        students_qs = students_qs.filter(fee_class_id=class_id)
     if search:
         students_qs = students_qs.filter(
             Q(student_name__icontains=search) |
@@ -426,7 +481,7 @@ def get_all_students_quarterly_defaulters(academic_year="2026-2027", class_id=No
     overdue_students_count = 0
 
     for st in students:
-        quarterly_slab_fee = class_to_slab_fee.get(st.school_class_id, Decimal("0.00"))
+        quarterly_slab_fee = class_to_slab_fee.get(st.fee_class_id, Decimal("0.00"))
         total_st_credits = student_total_paid[st.id]
 
         # Step 1: Pre-calculate tagged payments for active quarters
@@ -530,7 +585,7 @@ def get_all_students_quarterly_defaulters(academic_year="2026-2027", class_id=No
             item["penalty"] = str(item["penalty"])
             del item["cutoff"]
 
-        cls_name = f"{st.school_class.name} - {st.school_class.section}" if st.school_class and st.school_class.section else (st.school_class.name if st.school_class else "N/A")
+        cls_name = f"{st.fee_class.name} - {st.fee_class.section}" if st.fee_class and st.fee_class.section else (st.fee_class.name if st.fee_class else "N/A")
 
         if quarter in ("Q1", "Q2", "Q3", "Q4"):
             target = next((item for item in st_quarters if item["quarter"] == quarter), None)
@@ -634,11 +689,38 @@ def get_all_students_quarterly_defaulters(academic_year="2026-2027", class_id=No
                 "quarters_breakdown": st_quarters,
             })
 
+    import math
+    total_count = len(results)
+    if page and str(page).lower() != "all":
+        try:
+            p = max(1, int(page))
+            ps = max(1, int(page_size))
+        except (ValueError, TypeError):
+            p = 1
+            ps = 25
+        start = (p - 1) * ps
+        end = start + ps
+        paginated_defaulters = results[start:end]
+        total_pages = max(1, math.ceil(total_count / ps))
+        return {
+            "total_students": total_count,
+            "overdue_students_count": overdue_students_count,
+            "total_outstanding_dues": str(total_outstanding_dues),
+            "total_penalties": str(total_penalties),
+            "page": p,
+            "page_size": ps,
+            "total_pages": total_pages,
+            "defaulters": paginated_defaulters
+        }
+
     return {
-        "total_students": len(results),
+        "total_students": total_count,
         "overdue_students_count": overdue_students_count,
         "total_outstanding_dues": str(total_outstanding_dues),
         "total_penalties": str(total_penalties),
+        "page": 1,
+        "page_size": total_count,
+        "total_pages": 1,
         "defaulters": results
     }
 
@@ -661,7 +743,7 @@ def sync_students_fees_due(academic_year="2026-2027"):
             {"quarter": "Q4", "start_date": date(base_year + 1, 1, 1)},
         ]
 
-        students = list(Student.objects.only("id", "school_class_id", "fees_due"))
+        students = list(Student.objects.only("id", "fee_class_id", "fees_due"))
         if not students:
             return
 
@@ -704,7 +786,7 @@ def sync_students_fees_due(academic_year="2026-2027"):
 
         to_update = []
         for st in students:
-            quarterly_slab_fee = class_to_slab_fee.get(st.school_class_id, Decimal("0.00"))
+            quarterly_slab_fee = class_to_slab_fee.get(st.fee_class_id, Decimal("0.00"))
             total_st_credits = student_total_paid[st.id]
 
             allocated_from_tag = {}
@@ -753,7 +835,7 @@ def sync_students_fees_due(academic_year="2026-2027"):
 
 # ─── Cash Counter OTP Verification Engine ─────────────────────────────────────
 
-def generate_counter_payment_otp(student_id, amount, operator_name="Operator", quarter="Q1", academic_year="2026-2027"):
+def generate_counter_payment_otp(student_id, amount, operator_name="Operator", quarter="Q1", academic_year="2026-2027", payment_date=None, waive_penalty=False):
     """
     Step 1 of Anti-Fraud Cash Collection:
     Generates a secure 6-digit OTP and initiates a FeePaymentSession.
@@ -766,6 +848,14 @@ def generate_counter_payment_otp(student_id, amount, operator_name="Operator", q
     otp_code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = timezone.now() + timezone.timedelta(minutes=5)
 
+    # Encode payment_date and waive_penalty safely into collected_by field
+    meta_parts = [operator_name or "Operator"]
+    if payment_date:
+        meta_parts.append(f"DATE:{str(payment_date).strip()[:10]}")
+    if waive_penalty:
+        meta_parts.append("WAIVE:1")
+    collected_by_str = "|".join(meta_parts)[:150]
+
     session = FeePaymentSession.objects.create(
         student=student,
         amount=amount_dec,
@@ -774,14 +864,14 @@ def generate_counter_payment_otp(student_id, amount, operator_name="Operator", q
         quarter=quarter,
         academic_year=academic_year,
         otp_expires_at=expires_at,
-        collected_by=operator_name,
+        collected_by=collected_by_str,
         status="PENDING",
     )
 
     return session
 
 
-def verify_counter_payment_otp_and_commit(session_id, input_otp, operator_name="Operator"):
+def verify_counter_payment_otp_and_commit(session_id, input_otp, operator_name="Operator", payment_date=None, waive_penalty=None):
     """
     Step 2 of Anti-Fraud Cash Collection:
     Validates the OTP entered by staff.
@@ -809,6 +899,39 @@ def verify_counter_payment_otp_and_commit(session_id, input_otp, operator_name="
         if session.otp_code.strip() != str(input_otp).strip():
             raise ValueError("Invalid OTP. Please check with parent and try again.")
 
+        # Decode metadata from session.collected_by if not explicitly passed
+        raw_meta = session.collected_by or ""
+        effective_date_obj = None
+        effective_waive = False
+        effective_operator = operator_name or "Operator"
+
+        if "|" in raw_meta:
+            parts = raw_meta.split("|")
+            effective_operator = parts[0] or effective_operator
+            for p in parts[1:]:
+                if p.startswith("DATE:"):
+                    d_str = p[5:].strip()
+                    try:
+                        from datetime import datetime
+                        effective_date_obj = datetime.strptime(d_str[:10], "%Y-%m-%d").date()
+                    except Exception:
+                        pass
+                elif p == "WAIVE:1":
+                    effective_waive = True
+
+        # Overwrite if passed explicitly in args
+        if payment_date:
+            try:
+                from datetime import datetime, date as dt_date
+                if isinstance(payment_date, dt_date):
+                    effective_date_obj = payment_date
+                else:
+                    effective_date_obj = datetime.strptime(str(payment_date).strip()[:10], "%Y-%m-%d").date()
+            except Exception:
+                pass
+        if waive_penalty is not None:
+            effective_waive = bool(waive_penalty)
+
         student = session.student
         student_rec_acc = get_or_create_student_receivable_account(student)
 
@@ -816,24 +939,64 @@ def verify_counter_payment_otp_and_commit(session_id, input_otp, operator_name="
         receipt_count = FeePaymentSession.objects.filter(status="VERIFIED").count() + 1
         receipt_number = f"RCP-{session.academic_year[:4]}-{receipt_count:05d}"
 
+        # Calculate if payment portion covers Late Fee Penalty (Credit 4030) vs Base Tuition (Credit 1100)
+        late_fee_income_acc = accounts.get("4030")
+        breakdown = get_student_quarterly_fee_breakdown(
+            student.id, 
+            academic_year=session.academic_year,
+            as_of_date=effective_date_obj
+        )
+        base_due = Decimal(str(breakdown.get("due_till_now", "0.00")))
+        late_penalty = Decimal(str(breakdown.get("total_late_fee_penalty", "0.00"))) if not effective_waive else Decimal("0.00")
+
+        penalty_portion = Decimal("0.00")
+        receivable_portion = session.amount
+
+        if not effective_waive:
+            if late_penalty > 0 and session.amount > base_due:
+                penalty_portion = min(session.amount - base_due, late_penalty)
+                receivable_portion = session.amount - penalty_portion
+            elif late_penalty > 0 and base_due <= 0:
+                penalty_portion = min(session.amount, late_penalty)
+                receivable_portion = session.amount - penalty_portion
+        else:
+            penalty_portion = Decimal("0.00")
+            receivable_portion = session.amount
+
         # Post Double-Entry Journal Entry
         items = [
             {"account": cash_account, "student": None, "debit": session.amount, "credit": Decimal("0.00")},
-            {"account": student_rec_acc, "student": student, "debit": Decimal("0.00"), "credit": session.amount},
+            {"account": student_rec_acc, "student": student, "debit": Decimal("0.00"), "credit": receivable_portion},
         ]
+        if penalty_portion > 0 and late_fee_income_acc:
+            items.append({
+                "account": late_fee_income_acc,
+                "student": student,
+                "debit": Decimal("0.00"),
+                "credit": penalty_portion,
+            })
+
         narration = (
             f"Cash fee collection verified via OTP for {student.student_name} "
-            f"({student.school_class}). Receipt: {receipt_number}"
+            f"({student.fee_class}). Receipt: {receipt_number}"
         )
+        if effective_date_obj:
+            narration += f" [Payment Date: {effective_date_obj.strftime('%d-%b-%Y')}]"
+        if effective_waive:
+            narration += " [Late Fee Waived: Transition/On-time Offline]"
+        elif penalty_portion > 0:
+            narration += f" [Includes ₹{penalty_portion} Late Fee Penalty]"
+
+        entry_date = effective_date_obj if effective_date_obj else timezone.now().date()
 
         entry = post_journal_entry(
-            date_val=timezone.now().date(),
+            date_val=entry_date,
             narration=narration,
             reference_type="CASH_RECEIPT",
             items_data=items,
             academic_year=session.academic_year,
             quarter=session.quarter,
-            created_by=operator_name,
+            created_by=effective_operator,
             receipt_number=receipt_number
         )
 
@@ -843,3 +1006,130 @@ def verify_counter_payment_otp_and_commit(session_id, input_otp, operator_name="
         session.save()
 
     return session, receipt_number
+
+
+def record_offline_direct_payment(
+    student_id,
+    amount,
+    quarter="Q3",
+    academic_year="2026-2027",
+    payment_date=None,
+    payment_mode="CASH",
+    offline_receipt_number=None,
+    waive_penalty=True,
+    operator_name="Fee Counter Operator"
+):
+    """
+    Directly records an offline historical / transition fee payment without OTP.
+    Used for students who already paid offline before or during transition period.
+    Creates Double-Entry Journal Entry:
+      Debit: 1010 Cash at Counter (or 1020 Bank Account)
+      Credit: 1100-{student_id} Student Receivable
+    Zeroes or adjusts overdue balance, with no late fee penalty added.
+    """
+    accounts = ensure_default_accounts()
+    asset_acc = accounts.get("1010") if str(payment_mode).upper() == "CASH" else accounts.get("1020")
+    if not asset_acc:
+        asset_acc = accounts["1010"]
+
+    student = Student.objects.get(id=student_id)
+    student_rec_acc = get_or_create_student_receivable_account(student)
+    amount_dec = Decimal(str(amount))
+
+    # Parse payment date
+    date_obj = None
+    if payment_date:
+        try:
+            from datetime import datetime, date as dt_date
+            if isinstance(payment_date, dt_date):
+                date_obj = payment_date
+            else:
+                date_obj = datetime.strptime(str(payment_date).strip()[:10], "%Y-%m-%d").date()
+        except Exception:
+            pass
+    if not date_obj:
+        date_obj = timezone.now().date()
+
+    # Generate receipt / voucher number
+    receipt_count = FeePaymentSession.objects.filter(status="VERIFIED").count() + 1
+    receipt_number = (offline_receipt_number or "").strip()
+    if not receipt_number:
+        receipt_number = f"OFF-{academic_year[:4]}-{receipt_count:05d}"
+
+    with transaction.atomic():
+        # Calculate if payment portion covers Late Fee Penalty (Credit 4030) vs Base Tuition (Credit 1100)
+        late_fee_income_acc = accounts.get("4030")
+        breakdown = get_student_quarterly_fee_breakdown(
+            student.id, 
+            academic_year=academic_year,
+            as_of_date=date_obj
+        )
+        base_due = Decimal(str(breakdown.get("due_till_now", "0.00")))
+        late_penalty = Decimal(str(breakdown.get("total_late_fee_penalty", "0.00"))) if not waive_penalty else Decimal("0.00")
+
+        penalty_portion = Decimal("0.00")
+        receivable_portion = amount_dec
+
+        if not waive_penalty:
+            if late_penalty > 0 and amount_dec > base_due:
+                penalty_portion = min(amount_dec - base_due, late_penalty)
+                receivable_portion = amount_dec - penalty_portion
+            elif late_penalty > 0 and base_due <= 0:
+                penalty_portion = min(amount_dec, late_penalty)
+                receivable_portion = amount_dec - penalty_portion
+        else:
+            penalty_portion = Decimal("0.00")
+            receivable_portion = amount_dec
+
+        # Items for double-entry
+        items = [
+            {"account": asset_acc, "student": None, "debit": amount_dec, "credit": Decimal("0.00")},
+            {"account": student_rec_acc, "student": student, "debit": Decimal("0.00"), "credit": receivable_portion},
+        ]
+        if penalty_portion > 0 and late_fee_income_acc:
+            items.append({
+                "account": late_fee_income_acc,
+                "student": student,
+                "debit": Decimal("0.00"),
+                "credit": penalty_portion,
+            })
+
+        narration = (
+            f"Offline fee payment recorded (No OTP) for {student.student_name} "
+            f"({student.fee_class}). Voucher/Receipt: {receipt_number} [Paid Date: {date_obj.strftime('%d-%b-%Y')}]"
+        )
+        if waive_penalty:
+            narration += " [Late Fee Waived: Offline Transition Payment]"
+        elif penalty_portion > 0:
+            narration += f" [Includes ₹{penalty_portion} Late Fee Penalty]"
+
+        entry = post_journal_entry(
+            date_val=date_obj,
+            narration=narration,
+            reference_type="CASH_RECEIPT" if str(payment_mode).upper() == "CASH" else "BANK_RECEIPT",
+            items_data=items,
+            academic_year=academic_year,
+            quarter=quarter,
+            created_by=operator_name or "Operator",
+            receipt_number=receipt_number
+        )
+
+        session = FeePaymentSession.objects.create(
+            student=student,
+            amount=amount_dec,
+            otp_code="OFFLINE",
+            parent_phone=student.whatsapp_number or "",
+            quarter=quarter,
+            academic_year=academic_year,
+            otp_expires_at=timezone.now(),
+            collected_by=f"{operator_name or 'Operator'}|DATE:{date_obj.strftime('%Y-%m-%d')}|WAIVE:{1 if waive_penalty else 0}|OFFLINE",
+            status="VERIFIED",
+            receipt_number=receipt_number,
+            journal_entry=entry,
+        )
+
+        # Synchronize live balance
+        breakdown = get_student_quarterly_fee_breakdown(student.id, academic_year=academic_year)
+        FeeStudent.objects.filter(id=student.id).update(fees_due=breakdown["due_till_now"])
+
+    return session, receipt_number, breakdown

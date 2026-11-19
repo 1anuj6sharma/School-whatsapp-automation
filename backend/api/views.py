@@ -140,12 +140,6 @@ class ClassDetailView(APIView):
 
 class StudentListCreateView(APIView):
     def get(self, request):
-        try:
-            from fees.services import sync_students_fees_due
-            sync_students_fees_due()
-        except Exception:
-            pass
-
         class_id = request.query_params.get("class_id")
         class_ids = request.query_params.get("class_ids")
         search = request.query_params.get("search")

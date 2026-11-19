@@ -1,20 +1,40 @@
 from django.urls import path
 from .views import (
     # Management Section
+    ManagementFeeClassesView,
+    ManagementFeeStudentsView,
+    ManagementFeeStudentsSyncRosterView,
+    ManagementAccountsListView,
+    ManagementAccountDetailsView,
     ManagementFeeSlabListCreateView,
     ManagementFeeSlabDetailView,
     ManagementPostQuarterlyFeesView,
     ManagementJournalEntriesListView,
+    ManagementJournalEntryDetailView,
     # Operator Section
     OperatorStudentFeeSummaryView,
     OperatorSendCashPaymentOTPView,
     OperatorVerifyPaymentOTPView,
     OperatorDefaultersListView,
     OperatorStudentPassbookView,
+    OperatorRecordOfflinePaymentView,
 )
 
 urlpatterns = [
     # ── Management Section URLs ──
+    path("management/classes", ManagementFeeClassesView.as_view(), name="fee-classes-list-create"),
+    path("management/classes/", ManagementFeeClassesView.as_view(), name="fee-classes-list-create-slash"),
+
+    path("management/students", ManagementFeeStudentsView.as_view(), name="fee-students-list-create"),
+    path("management/students/", ManagementFeeStudentsView.as_view(), name="fee-students-list-create-slash"),
+    path("management/students/sync-roster", ManagementFeeStudentsSyncRosterView.as_view(), name="fee-students-sync-roster"),
+    path("management/students/sync-roster/", ManagementFeeStudentsSyncRosterView.as_view(), name="fee-students-sync-roster-slash"),
+
+    path("management/accounts", ManagementAccountsListView.as_view(), name="fee-accounts-list"),
+    path("management/accounts/", ManagementAccountsListView.as_view(), name="fee-accounts-list-slash"),
+    path("management/accounts/<int:pk>", ManagementAccountDetailsView.as_view(), name="fee-account-detail"),
+    path("management/accounts/<int:pk>/", ManagementAccountDetailsView.as_view(), name="fee-account-detail-slash"),
+
     path("management/slabs", ManagementFeeSlabListCreateView.as_view(), name="fee-slab-list-create"),
     path("management/slabs/", ManagementFeeSlabListCreateView.as_view(), name="fee-slab-list-create-slash"),
     path("management/slabs/<int:pk>", ManagementFeeSlabDetailView.as_view(), name="fee-slab-detail"),
@@ -23,6 +43,8 @@ urlpatterns = [
     path("management/post-quarterly-fees/", ManagementPostQuarterlyFeesView.as_view(), name="post-quarterly-fees-slash"),
     path("management/journal-entries", ManagementJournalEntriesListView.as_view(), name="journal-entries-list"),
     path("management/journal-entries/", ManagementJournalEntriesListView.as_view(), name="journal-entries-list-slash"),
+    path("management/journal-entries/<int:pk>", ManagementJournalEntryDetailView.as_view(), name="journal-entry-detail"),
+    path("management/journal-entries/<int:pk>/", ManagementJournalEntryDetailView.as_view(), name="journal-entry-detail-slash"),
 
     # ── Operator Section URLs ──
     path("operator/student-summary/<int:student_id>", OperatorStudentFeeSummaryView.as_view(), name="operator-student-summary"),
@@ -35,4 +57,6 @@ urlpatterns = [
     path("operator/verify-otp/", OperatorVerifyPaymentOTPView.as_view(), name="operator-verify-otp-slash"),
     path("operator/defaulters", OperatorDefaultersListView.as_view(), name="operator-defaulters"),
     path("operator/defaulters/", OperatorDefaultersListView.as_view(), name="operator-defaulters-slash"),
+    path("operator/record-offline-payment", OperatorRecordOfflinePaymentView.as_view(), name="operator-record-offline-payment"),
+    path("operator/record-offline-payment/", OperatorRecordOfflinePaymentView.as_view(), name="operator-record-offline-payment-slash"),
 ]

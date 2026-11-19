@@ -20,9 +20,17 @@ import {
   AlertCircle,
   BookOpen,
   FileText,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { sortClassesAscending } from '../utils/classSort';
+
+// Module-level in-memory cache for Quarter Due & Defaulters List (SWR)
+const defaultersMemoryCache = {
+  data: null,
+  totalPages: 1,
+};
 
 export function FeeCounterPage({ showToast }) {
   // Sub-tabs: 'counter' | 'defaulters'
@@ -54,19 +62,23 @@ export function FeeCounterPage({ showToast }) {
   // Receipt Modal on Successful Payment
   const [verifiedReceipt, setVerifiedReceipt] = useState(null);
 
-  // Defaulters / Due Fees Section State
-  const [defaultersData, setDefaultersData] = useState({
+  // Defaulters / Due Fees Section State (initialized from memory cache for instant rendering)
+  const [defaultersData, setDefaultersData] = useState(() => defaultersMemoryCache.data || {
     defaulters: [],
     total_students: 0,
     overdue_students_count: 0,
     total_outstanding_dues: '0',
     total_penalties: '0',
   });
-  const [loadingDefaulters, setLoadingDefaulters] = useState(false);
+  const [loadingDefaulters, setLoadingDefaulters] = useState(() => !defaultersMemoryCache.data);
+  const [isRefreshingDefaulters, setIsRefreshingDefaulters] = useState(false);
   const [defaulterQuarter, setDefaulterQuarter] = useState('TILL_NOW');
   const [onlyLate, setOnlyLate] = useState(false);
   const [defaulterClassId, setDefaulterClassId] = useState('');
   const [defaulterSearch, setDefaulterSearch] = useState('');
+  const [defaulterPage, setDefaulterPage] = useState(1);
+  const [defaulterPageSize, setDefaulterPageSize] = useState(25);
+  const [defaulterTotalPages, setDefaulterTotalPages] = useState(() => defaultersMemoryCache.totalPages || 1);
 
   // Passbook Section State
   const [passbookStudent, setPassbookStudent] = useState(null);
@@ -77,12 +89,104 @@ export function FeeCounterPage({ showToast }) {
   const [passbookStudents, setPassbookStudents] = useState([]);
   const [searchingPassbookStudents, setSearchingPassbookStudents] = useState(false);
 
+  // Offline / Transition Payment Modal (from Quarter Due List - No OTP)
+  const [offlineModalStudent, setOfflineModalStudent] = useState(null);
+  const [offlineAmount, setOfflineAmount] = useState('');
+  const [offlineDate, setOfflineDate] = useState('2026-11-10');
+  const [offlineWaivePenalty, setOfflineWaivePenalty] = useState(true);
+  const [offlineReceiptNo, setOfflineReceiptNo] = useState('');
+  const [offlinePaymentMode, setOfflinePaymentMode] = useState('CASH');
+  const [recordingOffline, setRecordingOffline] = useState(false);
+
+  const handleOpenOfflineModal = (defaulter) => {
+    setOfflineModalStudent(defaulter);
+    setOfflineWaivePenalty(true);
+    setOfflineDate('2026-11-10');
+    // Pre-fill base tuition due when waived
+    setOfflineAmount(String(defaulter.base_due || defaulter.total_payable || ''));
+    setOfflineReceiptNo('');
+    setOfflinePaymentMode('CASH');
+  };
+
+  const handleToggleOfflineWaive = (waive) => {
+    setOfflineWaivePenalty(waive);
+    if (!offlineModalStudent) return;
+    const baseDue = Number(offlineModalStudent.base_due || 0);
+    const penaltyAmt = Number(offlineModalStudent.late_penalty || 0);
+    if (waive) {
+      // If waived (checked): only base due
+      setOfflineAmount(String(baseDue > 0 ? baseDue : (offlineModalStudent.total_payable || '')));
+    } else {
+      // If not waived (unchecked): add late fee penalty
+      const totalWithPen = baseDue + penaltyAmt;
+      setOfflineAmount(String(totalWithPen > 0 ? totalWithPen : (offlineModalStudent.total_payable || '')));
+    }
+  };
+
+  const handleOfflineDateChange = (newDate) => {
+    setOfflineDate(newDate);
+    if (!offlineModalStudent) return;
+    const cutoff = getQuarterCutoff(offlineModalStudent.quarter || selectedQuarter || 'Q3');
+    // If date is on or before cutoff, automatically check waive
+    if (newDate <= cutoff) {
+      setOfflineWaivePenalty(true);
+      const baseDue = Number(offlineModalStudent.base_due || 0);
+      setOfflineAmount(String(baseDue > 0 ? baseDue : (offlineModalStudent.total_payable || '')));
+    }
+  };
+
+  const handleSubmitOfflinePayment = async (e) => {
+    e.preventDefault();
+    if (!offlineModalStudent || !offlineAmount || Number(offlineAmount) <= 0) {
+      showToast?.({ type: 'error', title: 'Invalid Amount', message: 'Please enter a valid amount.' });
+      return;
+    }
+
+    setRecordingOffline(true);
+    try {
+      const res = await api.recordOfflinePayment({
+        student_id: offlineModalStudent.student_id,
+        amount: offlineAmount,
+        quarter: offlineModalStudent.quarter || selectedQuarter || 'Q3',
+        academic_year: '2026-2027',
+        payment_date: offlineDate,
+        payment_mode: offlinePaymentMode,
+        receipt_number: offlineReceiptNo.trim() || undefined,
+        waive_penalty: offlineWaivePenalty,
+        operator_name: 'Fee Counter Operator',
+      });
+
+      showToast?.({
+        type: 'success',
+        title: 'Offline Payment Recorded!',
+        message: `Payment of ₹${Number(offlineAmount).toLocaleString('en-IN')} recorded for ${offlineModalStudent.student_name}. Dues cleared!`,
+      });
+
+      setOfflineModalStudent(null);
+      // Immediately reload the defaulters list
+      loadDefaulters();
+    } catch (err) {
+      showToast?.({
+        type: 'error',
+        title: 'Recording Failed',
+        message: err.message || 'Could not record offline payment.',
+      });
+    } finally {
+      setRecordingOffline(false);
+    }
+  };
+
   useEffect(() => {
     loadClasses();
   }, []);
 
-  const loadDefaulters = async () => {
-    setLoadingDefaulters(true);
+  const loadDefaulters = async (pageToLoad = defaulterPage, pageSizeToLoad = defaulterPageSize) => {
+    // SWR: silent background revalidation if data is already cached
+    if (!defaultersMemoryCache.data || (defaultersData.defaulters && defaultersData.defaulters.length === 0)) {
+      setLoadingDefaulters(true);
+    } else {
+      setIsRefreshingDefaulters(true);
+    }
     try {
       const res = await api.getFeeDefaulters({
         quarter: defaulterQuarter,
@@ -90,26 +194,43 @@ export function FeeCounterPage({ showToast }) {
         only_late: onlyLate ? 'true' : 'false',
         search: defaulterSearch.trim() || undefined,
         academic_year: '2026-2027',
+        page: pageToLoad,
+        page_size: pageSizeToLoad,
       });
-      setDefaultersData({
+      const nextData = {
         defaulters: res.defaulters || [],
         total_students: res.total_students || 0,
         overdue_students_count: res.overdue_students_count || 0,
         total_outstanding_dues: res.total_outstanding_dues || '0',
         total_penalties: res.total_penalties || '0',
-      });
+      };
+      defaultersMemoryCache.data = nextData;
+      defaultersMemoryCache.totalPages = res.total_pages || 1;
+      setDefaultersData(nextData);
+      setDefaulterTotalPages(res.total_pages || 1);
+      setDefaulterPage(res.page || pageToLoad);
     } catch (err) {
       showToast?.({ type: 'error', title: 'Defaulters Error', message: 'Failed to load fee dues list.' });
     } finally {
       setLoadingDefaulters(false);
+      setIsRefreshingDefaulters(false);
     }
   };
 
   useEffect(() => {
     if (activeTab === 'defaulters') {
-      loadDefaulters();
+      setDefaulterPage(1);
+      loadDefaulters(1, defaulterPageSize);
     }
   }, [activeTab, defaulterQuarter, onlyLate, defaulterClassId]);
+
+  const getQuarterCutoff = (quarter) => {
+    if (quarter === 'Q3' || quarter === 'TILL_NOW' || quarter === 'ANNUAL') return '2026-11-10';
+    if (quarter === 'Q4') return '2027-02-10';
+    if (quarter === 'Q1') return '2026-05-10';
+    if (quarter === 'Q2') return '2026-08-10';
+    return '2026-11-10';
+  };
 
   const handleQuickCollect = (defaulter) => {
     setActiveTab('counter');
@@ -128,10 +249,11 @@ export function FeeCounterPage({ showToast }) {
 
   const loadClasses = async () => {
     try {
-      const cls = await api.getClasses();
-      setClasses(sortClassesAscending(cls));
+      const res = api.getFeeClasses ? await api.getFeeClasses() : await api.getClasses();
+      const list = Array.isArray(res) ? res : (res?.results || res?.classes || []);
+      setClasses(sortClassesAscending(list));
     } catch (err) {
-      console.error(err);
+      console.error('Failed to load classes in fee counter:', err);
     }
   };
 
@@ -139,6 +261,7 @@ export function FeeCounterPage({ showToast }) {
   const handleLoadPassbook = async (student) => {
     if (!student) return;
     setPassbookStudent(student);
+    setPassbookStudents([]);
     setPassbookData(null);
     setLoadingPassbook(true);
     try {
@@ -154,18 +277,31 @@ export function FeeCounterPage({ showToast }) {
   // Search students within Passbook tab
   const handleSearchPassbookStudents = async (e) => {
     e?.preventDefault();
+    if (!passbookSearch.trim() && !passbookClassId) {
+      showToast?.({
+        type: 'info',
+        title: 'Search Required',
+        message: 'Please enter student name, mobile or select class to search passbook.',
+      });
+      return;
+    }
+
     setSearchingPassbookStudents(true);
     try {
-      const res = await api.getStudents({
-        search: passbookSearch.trim(),
-        class_id: passbookClassId || undefined,
-        limit: 25,
-      });
+      const res = api.getFeeStudents
+        ? await api.getFeeStudents({ search: passbookSearch.trim(), class_id: passbookClassId || undefined })
+        : await api.getStudents({ search: passbookSearch.trim(), class_id: passbookClassId || undefined, limit: 25 });
       const list = res.students || res || [];
       const sorted = Array.isArray(list) ? list : [];
-      setPassbookStudents(sorted);
-      if (sorted.length === 1) {
+
+      if (sorted.length === 0) {
+        showToast?.({ type: 'warning', title: 'Not Found', message: 'No student found matching your search.' });
+        setPassbookStudents([]);
+      } else if (sorted.length === 1) {
+        setPassbookStudents([]);
         handleLoadPassbook(sorted[0]);
+      } else {
+        setPassbookStudents(sorted);
       }
     } catch (err) {
       showToast?.({ type: 'error', title: 'Search Failed', message: 'Could not search students for passbook.' });
@@ -208,11 +344,9 @@ export function FeeCounterPage({ showToast }) {
           handleSelectStudent(mapped[0]);
         }
       } else {
-        const res = await api.getStudents({
-          search: searchQuery.trim(),
-          class_id: selectedClassId || undefined,
-          limit: 25,
-        });
+        const res = api.getFeeStudents
+          ? await api.getFeeStudents({ search: searchQuery.trim(), class_id: selectedClassId || undefined })
+          : await api.getStudents({ search: searchQuery.trim(), class_id: selectedClassId || undefined, limit: 25 });
         const list = res.students || res || [];
         const arr = Array.isArray(list) ? list : [];
         setStudents(arr);
@@ -235,7 +369,9 @@ export function FeeCounterPage({ showToast }) {
     setLoadingSummary(true);
 
     try {
-      const data = await api.getOperatorStudentFeeSummary(st.id, { quarter: targetQuarter });
+      const data = await api.getOperatorStudentFeeSummary(st.id, {
+        quarter: targetQuarter,
+      });
       setFeeSummary(data);
       if (Number(data.total_payable_now) > 0) {
         setCashAmount(data.total_payable_now);
@@ -349,7 +485,7 @@ export function FeeCounterPage({ showToast }) {
       });
 
       // Refresh student dues
-      handleSelectStudent(selectedStudent);
+      handleSelectStudent(selectedStudent, selectedQuarter);
     } catch (err) {
       showToast?.({ type: 'error', title: 'Verification Failed', message: err.message || 'Incorrect OTP code.' });
     } finally {
@@ -407,7 +543,7 @@ export function FeeCounterPage({ showToast }) {
           }`}
         >
           <Users className="w-3.5 h-3.5" />
-          <span>Quarter Due &amp; Defaulters List</span>
+          <span>Quarter Due List</span>
           {defaultersData.overdue_students_count > 0 && (
             <span className="px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-black leading-none">
               {defaultersData.overdue_students_count}
@@ -618,15 +754,19 @@ export function FeeCounterPage({ showToast }) {
                   )}
                 </div>
 
-                <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/50">
+                <div className={`p-3 rounded-xl border ${Number(feeSummary.penalty?.amount || 0) > 0 ? 'border-amber-200 bg-amber-50/50' : 'border-slate-200 bg-white'}`}>
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-amber-900">Late Fee Penalty:</span>
-                    <span className="text-base font-bold text-amber-900 flex items-center">
-                      <IndianRupee className="w-4 h-4 text-amber-600" />
+                    <span className={`text-[11px] font-bold ${Number(feeSummary.penalty?.amount || 0) > 0 ? 'text-amber-900' : 'text-slate-500'}`}>
+                      Late Fee Penalty:
+                    </span>
+                    <span className={`text-base font-bold flex items-center ${Number(feeSummary.penalty?.amount || 0) > 0 ? 'text-amber-900' : 'text-slate-900'}`}>
+                      <IndianRupee className="w-4 h-4" />
                       <span>{Number(feeSummary.penalty?.amount || 0).toLocaleString('en-IN')}</span>
                     </span>
                   </div>
-                  <p className="text-[10px] text-amber-800 mt-1 line-clamp-1">{feeSummary.penalty?.reason}</p>
+                  <p className={`text-[10px] mt-1 line-clamp-1 ${Number(feeSummary.penalty?.amount || 0) > 0 ? 'text-amber-800' : 'text-slate-400'}`}>
+                    {feeSummary.penalty?.reason || 'No late penalty applicable'}
+                  </p>
                 </div>
               </div>
 
@@ -682,7 +822,7 @@ export function FeeCounterPage({ showToast }) {
               )}
 
               {/* Cash Collection Form */}
-              <form onSubmit={handleInitiateCashPayment} className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/40 space-y-3">
+              <form onSubmit={handleInitiateCashPayment} className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/40 space-y-3.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-emerald-700" />
@@ -693,7 +833,7 @@ export function FeeCounterPage({ showToast }) {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-700 mb-1">Billing Quarter / Mode:</label>
                     <select
@@ -736,7 +876,7 @@ export function FeeCounterPage({ showToast }) {
                 <button
                   type="submit"
                   disabled={initiatingSession || !cashAmount || Number(cashAmount) <= 0}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer mt-1"
                 >
                   {initiatingSession ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -762,7 +902,7 @@ export function FeeCounterPage({ showToast }) {
             <div>
               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <Users className="w-5 h-5 text-emerald-600" />
-                <span>Quarter Due Fees &amp; Overdue Students</span>
+                <span>Quarter Due List</span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 Real-time ledger dues with automatic 10th-cutoff penalty tracking (₹100 for current overdue, ₹500 for prior quarters).
@@ -771,12 +911,12 @@ export function FeeCounterPage({ showToast }) {
 
             <div className="flex items-center gap-2">
               <button
-                onClick={loadDefaulters}
-                disabled={loadingDefaulters}
+                onClick={() => loadDefaulters(1)}
+                disabled={loadingDefaulters && defaultersData.defaulters.length === 0}
                 className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
               >
-                <RotateCcw className={`w-3.5 h-3.5 ${loadingDefaulters ? 'animate-spin' : ''}`} />
-                <span>Refresh List</span>
+                <RotateCcw className={`w-3.5 h-3.5 ${(loadingDefaulters && defaultersData.defaulters.length === 0) || isRefreshingDefaulters ? 'animate-spin text-emerald-600' : ''}`} />
+                <span>{isRefreshingDefaulters ? 'Syncing...' : 'Refresh List'}</span>
               </button>
             </div>
           </div>
@@ -785,28 +925,44 @@ export function FeeCounterPage({ showToast }) {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
               <span className="text-[11px] font-semibold text-slate-500 block">Total Due Students</span>
-              <span className="text-lg font-black text-slate-900 mt-0.5 block">{defaultersData.total_students}</span>
+              {loadingDefaulters && defaultersData.defaulters.length === 0 ? (
+                <div className="h-6 w-16 bg-slate-200 animate-pulse rounded mt-1" />
+              ) : (
+                <span className="text-lg font-black text-slate-900 mt-0.5 block">{defaultersData.total_students}</span>
+              )}
             </div>
 
             <div className="p-3.5 rounded-xl bg-red-50/70 border border-red-200">
-              <span className="text-[11px] font-bold text-red-700 block">Overdue Defaulters</span>
-              <span className="text-lg font-black text-red-900 mt-0.5 block">{defaultersData.overdue_students_count}</span>
+              <span className="text-[11px] font-bold text-red-700 block">Overdue Students</span>
+              {loadingDefaulters && defaultersData.defaulters.length === 0 ? (
+                <div className="h-6 w-16 bg-red-200/60 animate-pulse rounded mt-1" />
+              ) : (
+                <span className="text-lg font-black text-red-900 mt-0.5 block">{defaultersData.overdue_students_count}</span>
+              )}
             </div>
 
             <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
               <span className="text-[11px] font-semibold text-slate-500 block">Outstanding Base Dues</span>
-              <span className="text-lg font-black text-slate-900 mt-0.5 flex items-center">
-                <IndianRupee className="w-4 h-4 text-slate-400" />
-                <span>{Number(defaultersData.total_outstanding_dues).toLocaleString('en-IN')}</span>
-              </span>
+              {loadingDefaulters && defaultersData.defaulters.length === 0 ? (
+                <div className="h-6 w-24 bg-slate-200 animate-pulse rounded mt-1" />
+              ) : (
+                <span className="text-lg font-black text-slate-900 mt-0.5 flex items-center">
+                  <IndianRupee className="w-4 h-4 text-slate-400" />
+                  <span>{Number(defaultersData.total_outstanding_dues).toLocaleString('en-IN')}</span>
+                </span>
+              )}
             </div>
 
             <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200">
               <span className="text-[11px] font-bold text-amber-800 block">Total Late Penalties</span>
-              <span className="text-lg font-black text-amber-900 mt-0.5 flex items-center">
-                <IndianRupee className="w-4 h-4 text-amber-600" />
-                <span>{Number(defaultersData.total_penalties).toLocaleString('en-IN')}</span>
-              </span>
+              {loadingDefaulters && defaultersData.defaulters.length === 0 ? (
+                <div className="h-6 w-24 bg-amber-200/60 animate-pulse rounded mt-1" />
+              ) : (
+                <span className="text-lg font-black text-amber-900 mt-0.5 flex items-center">
+                  <IndianRupee className="w-4 h-4 text-amber-600" />
+                  <span>{Number(defaultersData.total_penalties).toLocaleString('en-IN')}</span>
+                </span>
+              )}
             </div>
           </div>
 
@@ -872,7 +1028,7 @@ export function FeeCounterPage({ showToast }) {
           </div>
 
           {/* Table */}
-          {loadingDefaulters ? (
+          {loadingDefaulters && defaultersData.defaulters.length === 0 ? (
             <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
               <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
               <p className="text-xs font-semibold">Loading student ledger balances...</p>
@@ -880,7 +1036,7 @@ export function FeeCounterPage({ showToast }) {
           ) : defaultersData.defaulters.length === 0 ? (
             <div className="p-12 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
               <CheckCircle className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-              <p className="text-xs font-bold text-slate-700">No Defaulters Found</p>
+              <p className="text-xs font-bold text-slate-700">No Pending Dues Found</p>
               <p className="text-[11px] text-slate-400 mt-1">
                 All students are clear of dues for the selected filter!
               </p>
@@ -944,18 +1100,99 @@ export function FeeCounterPage({ showToast }) {
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <button
-                            onClick={() => handleQuickCollect(d)}
-                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition-all cursor-pointer"
-                          >
-                            Collect Fee
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleQuickCollect(d)}
+                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold shadow-xs transition-all cursor-pointer whitespace-nowrap"
+                              title="Collect live cash with parent WhatsApp OTP"
+                            >
+                              Collect Cash
+                            </button>
+                            <button
+                              onClick={() => handleOpenOfflineModal(d)}
+                              className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-[10px] font-bold shadow-2xs transition-all cursor-pointer whitespace-nowrap flex items-center gap-1"
+                              title="Student already paid offline in past (Record without OTP)"
+                            >
+                              <CheckCircle className="w-3 h-3 text-emerald-600" />
+                              <span>Mark Paid</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination Controls */}
+              {defaultersData.total_students > 0 && (
+                <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2 text-slate-500">
+                    <span>
+                      Showing <strong className="text-slate-800">{(defaulterPage - 1) * defaulterPageSize + 1}</strong> to{' '}
+                      <strong className="text-slate-800">
+                        {Math.min(defaulterPage * defaulterPageSize, defaultersData.total_students)}
+                      </strong>{' '}
+                      of <strong className="text-slate-800">{defaultersData.total_students}</strong> students
+                    </span>
+                    <span className="text-slate-300">|</span>
+                    <div className="flex items-center gap-1.5">
+                      <span>Per page:</span>
+                      <select
+                        value={defaulterPageSize}
+                        onChange={(e) => {
+                          const newSize = Number(e.target.value);
+                          setDefaulterPageSize(newSize);
+                          setDefaulterPage(1);
+                          loadDefaulters(1, newSize);
+                        }}
+                        className="px-2 py-1 bg-white border border-slate-200 rounded-md font-semibold text-slate-700 outline-hidden cursor-pointer"
+                      >
+                        <option value="15">15</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        if (defaulterPage > 1) {
+                          const prev = defaulterPage - 1;
+                          setDefaulterPage(prev);
+                          loadDefaulters(prev, defaulterPageSize);
+                        }
+                      }}
+                      disabled={defaulterPage <= 1 || loadingDefaulters}
+                      className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-white transition-all cursor-pointer"
+                      title="Previous Page"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+
+                    <span className="px-3 py-1 font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg">
+                      Page {defaulterPage} of {defaulterTotalPages}
+                    </span>
+
+                    <button
+                      onClick={() => {
+                        if (defaulterPage < defaulterTotalPages) {
+                          const next = defaulterPage + 1;
+                          setDefaulterPage(next);
+                          loadDefaulters(next, defaulterPageSize);
+                        }
+                      }}
+                      disabled={defaulterPage >= defaulterTotalPages || loadingDefaulters}
+                      className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-white transition-all cursor-pointer"
+                      title="Next Page"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1027,11 +1264,11 @@ export function FeeCounterPage({ showToast }) {
               </button>
             </form>
 
-            {/* Quick Student Results Selector */}
-            {passbookStudents.length > 0 && (
+            {/* Matching Search Results Selector (Only shown if multiple students match search query) */}
+            {passbookStudents.length > 1 && (
               <div className="pt-2 border-t border-slate-100">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
-                  Select Student to Load Passbook:
+                  Multiple matches found ({passbookStudents.length}). Select student to open passbook:
                 </span>
                 <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
                   {passbookStudents.map((st) => (
@@ -1039,11 +1276,7 @@ export function FeeCounterPage({ showToast }) {
                       key={st.id}
                       type="button"
                       onClick={() => handleLoadPassbook(st)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 border transition-all cursor-pointer ${
-                        passbookStudent?.id === st.id
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                          : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
-                      }`}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 border bg-white hover:bg-slate-50 text-slate-700 border-slate-200 transition-all cursor-pointer shadow-2xs"
                     >
                       <User className="w-3 h-3" />
                       <span>{st.student_name}</span>
@@ -1279,7 +1512,7 @@ export function FeeCounterPage({ showToast }) {
                 <span className="text-[11px] text-slate-500 block">Cash Amount to Collect:</span>
                 <span className="text-xl font-black text-slate-900">₹{Number(otpSession.amount).toLocaleString('en-IN')}</span>
                 <p className="text-[11px] text-slate-600 mt-1">
-                  Sent to parent mobile: <strong>{otpSession.parent_phone_masked}</strong>
+                  Sent to parent: <strong>{otpSession.parent_phone_masked}</strong>
                 </p>
               </div>
 
@@ -1419,6 +1652,181 @@ export function FeeCounterPage({ showToast }) {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Modal 3: Record Past Offline Payment (No OTP) ────────────────────── */}
+      {offlineModalStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-emerald-400" />
+                <div>
+                  <h3 className="text-sm font-bold">Record Past Offline Payment</h3>
+                  <p className="text-[10px] text-slate-300">Direct ledger entry for students who already paid (No OTP)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setOfflineModalStudent(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitOfflinePayment} className="p-5 space-y-4">
+              {/* Student Header */}
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-slate-900">{offlineModalStudent.student_name}</h4>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                    {offlineModalStudent.class_name}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Parent: <strong className="text-slate-700">{offlineModalStudent.parent_name || 'N/A'}</strong> &bull; Phone: <strong className="text-slate-700">{offlineModalStudent.whatsapp_number}</strong>
+                </p>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Quarter: <strong className="text-slate-800">{offlineModalStudent.quarter_name || offlineModalStudent.quarter || 'Q3'}</strong> &bull; Total Ledger Due: <strong className="text-slate-900">₹{Number(offlineModalStudent.total_payable || offlineModalStudent.base_due).toLocaleString('en-IN')}</strong>
+                </p>
+              </div>
+
+              {/* Amount & Penalty Status */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Settlement Amount (₹):
+                  </label>
+                  <div className="relative">
+                    <IndianRupee className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={offlineAmount}
+                      onChange={(e) => setOfflineAmount(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:border-emerald-600 outline-hidden"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-500 block mt-1">
+                    {offlineWaivePenalty ? 'Base tuition fee only (No penalty)' : `Base fee + ₹${offlineModalStudent.late_penalty || 0} late penalty`}
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Late Fee Penalty:
+                  </label>
+                  <label className={`flex items-center justify-between p-2 rounded-xl border transition-all cursor-pointer select-none ${
+                    offlineWaivePenalty
+                      ? 'bg-emerald-50/70 border-emerald-300 text-emerald-950'
+                      : 'bg-amber-50/60 border-amber-300 text-amber-950'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={offlineWaivePenalty}
+                        onChange={(e) => handleToggleOfflineWaive(e.target.checked)}
+                        className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 accent-emerald-600"
+                      />
+                      <div>
+                        <span className="text-xs font-bold block leading-tight">Waive Late Fee</span>
+                        <span className="text-[10px] opacity-75 block leading-tight mt-0.5">
+                          {offlineWaivePenalty ? 'Penalty removed (₹0.00)' : `Penalty added (+₹${offlineModalStudent.late_penalty || 0})`}
+                        </span>
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      offlineWaivePenalty ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-200 text-amber-900'
+                    }`}>
+                      {offlineWaivePenalty ? '₹0.00 Waived' : `+₹${offlineModalStudent.late_penalty || 0}`}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Date & Mode */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Actual Payment Date:
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={offlineDate}
+                    onChange={(e) => handleOfflineDateChange(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-emerald-600 outline-hidden"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    Recorded in ledger on this date
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Payment Mode:
+                  </label>
+                  <select
+                    value={offlinePaymentMode}
+                    onChange={(e) => setOfflinePaymentMode(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:border-emerald-600 outline-hidden cursor-pointer"
+                  >
+                    <option value="CASH">Cash at Counter (1010)</option>
+                    <option value="BANK">Bank Transfer / UPI (1020)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Receipt / Voucher Number */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Offline Paper Receipt / Voucher # (Optional):
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. REC-1025 or Diary Page 42"
+                  value={offlineReceiptNo}
+                  onChange={(e) => setOfflineReceiptNo(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:border-emerald-600 outline-hidden"
+                />
+              </div>
+
+              {/* Notice */}
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-[11px] text-amber-900 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p>
+                  This directly records the collection into the Double-Entry General Ledger and clears the student dues. <strong>No OTP is sent to the parent</strong>.
+                </p>
+              </div>
+
+              {/* Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setOfflineModalStudent(null)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-100 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={recordingOffline || !offlineAmount || Number(offlineAmount) <= 0}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  {recordingOffline ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4" />
+                      <span>Confirm &amp; Clear Due (No OTP)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

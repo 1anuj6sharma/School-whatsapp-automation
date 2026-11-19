@@ -1,18 +1,42 @@
 from rest_framework import serializers
-from .models import FeeSlab, Account, JournalEntry, JournalItem, FeePaymentSession
-from api.models import Class, Student
+from .models import FeeClass, FeeStudent, FeeSlab, Account, JournalEntry, JournalItem, FeePaymentSession
 
 
-class ClassSimpleSerializer(serializers.ModelSerializer):
+class FeeClassSerializer(serializers.ModelSerializer):
+    student_count = serializers.SerializerMethodField()
+
     class Meta:
-        model = Class
-        fields = ["id", "name", "section"]
+        model = FeeClass
+        fields = ["id", "name", "section", "description", "student_count", "is_active", "created_at"]
+
+    def get_student_count(self, obj):
+        if hasattr(obj, "student_count_annotated"):
+            return obj.student_count_annotated
+        return obj.students.count()
+
+
+class FeeStudentSerializer(serializers.ModelSerializer):
+    class_name = serializers.SerializerMethodField()
+    class_id = serializers.IntegerField(source="fee_class_id", allow_null=True, required=False)
+
+    class Meta:
+        model = FeeStudent
+        fields = [
+            "id", "student_name", "parent_name", "whatsapp_number",
+            "class_id", "class_name", "fees_due", "admission_number",
+            "is_active", "created_at", "updated_at"
+        ]
+
+    def get_class_name(self, obj):
+        if not obj.fee_class:
+            return "General Class"
+        return f"{obj.fee_class.name} ({obj.fee_class.section})" if obj.fee_class.section else obj.fee_class.name
 
 
 class FeeSlabSerializer(serializers.ModelSerializer):
-    classes = ClassSimpleSerializer(many=True, read_only=True)
+    classes = FeeClassSerializer(many=True, read_only=True)
     class_ids = serializers.PrimaryKeyRelatedField(
-        many=True, queryset=Class.objects.all(), write_only=True, source="classes", required=False
+        many=True, queryset=FeeClass.objects.all(), write_only=True, source="classes", required=False
     )
     student_count = serializers.SerializerMethodField()
 
@@ -26,7 +50,7 @@ class FeeSlabSerializer(serializers.ModelSerializer):
 
     def get_student_count(self, obj):
         class_ids = obj.classes.values_list("id", flat=True)
-        return Student.objects.filter(school_class_id__in=class_ids).count()
+        return FeeStudent.objects.filter(fee_class_id__in=class_ids).count()
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -60,13 +84,19 @@ class AccountSerializer(serializers.ModelSerializer):
 class JournalItemSerializer(serializers.ModelSerializer):
     account_code = serializers.CharField(source="account.code", read_only=True)
     account_name = serializers.CharField(source="account.name", read_only=True)
-    student_name = serializers.CharField(source="student.student_name", read_only=True)
+    student_name = serializers.CharField(source="student.student_name", read_only=True, default="")
+    entry_number = serializers.CharField(source="journal_entry.entry_number", read_only=True)
+    entry_date = serializers.DateField(source="journal_entry.date", read_only=True)
+    narration = serializers.CharField(source="journal_entry.narration", read_only=True)
+    reference_type = serializers.CharField(source="journal_entry.reference_type", read_only=True)
+    receipt_number = serializers.CharField(source="journal_entry.receipt_number", read_only=True, default="")
 
     class Meta:
         model = JournalItem
         fields = [
-            "id", "account_code", "account_name", "student_id",
-            "student_name", "debit", "credit"
+            "id", "journal_entry_id", "entry_number", "entry_date", "narration",
+            "reference_type", "receipt_number", "account_code", "account_name",
+            "student_id", "student_name", "debit", "credit", "created_at"
         ]
 
 
@@ -98,7 +128,6 @@ class FeePaymentSessionSerializer(serializers.ModelSerializer):
         ]
 
     def get_class_name(self, obj):
-        if obj.student and obj.student.school_class:
-            c = obj.student.school_class
-            return f"{c.name} - {c.section}" if c.section else c.name
-        return "N/A"
+        if not obj.student or not obj.student.fee_class:
+            return "General Class"
+        return f"{obj.student.fee_class.name} ({obj.student.fee_class.section})" if obj.student.fee_class.section else obj.student.fee_class.name

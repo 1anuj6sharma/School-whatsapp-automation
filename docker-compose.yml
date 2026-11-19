@@ -10,9 +10,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    expose:
-      - "3010"
+    ports:
+      - "${BACKEND_PORT:-3021}:3010"
     volumes:
+      - ./backend:/app
       - ./backend/data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -20,11 +21,11 @@ services:
       - 8.8.8.8
       - 1.1.1.1
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3010/health || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3010/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
     networks:
       - school_net_demo
 
@@ -36,7 +37,7 @@ services:
     container_name: school_whatsapp_frontend_demo
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-3020}:80"
+      - "${FRONTEND_PORT:-${APP_PORT:-3020}}:80"
     depends_on:
       backend:
         condition: service_healthy

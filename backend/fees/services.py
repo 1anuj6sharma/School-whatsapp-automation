@@ -63,58 +63,6 @@ def get_or_create_student_receivable_account(student):
     return acc
 
 
-def sync_roster_from_school_students():
-    """
-    Imports/syncs student records from api.Student into the dedicated FeeStudent model.
-    Does NOT touch api.Student or modify any marketing fees_due!
-    """
-    try:
-        from api.models import Student as MarketingStudent, Class as MarketingClass
-        # 1. Sync classes
-        m_classes = MarketingClass.objects.all()
-        class_map = {}
-        for mc in m_classes:
-            fc, _ = FeeClass.objects.get_or_create(
-                name=mc.name,
-                section=mc.section or "A",
-                defaults={"description": f"Fee Class {mc.name} ({mc.section or 'A'})"}
-            )
-            class_map[mc.id] = fc
-
-        # 2. Sync students
-        m_students = MarketingStudent.objects.all()
-        created_count = 0
-        updated_count = 0
-        for ms in m_students:
-            target_fee_class = class_map.get(ms.school_class_id)
-            fs = FeeStudent.objects.filter(student_name=ms.student_name, whatsapp_number=ms.whatsapp_number).first()
-            if not fs:
-                FeeStudent.objects.create(
-                    student_name=ms.student_name,
-                    parent_name=ms.parent_name or "",
-                    whatsapp_number=ms.whatsapp_number,
-                    fee_class=target_fee_class,
-                    admission_number=f"ADM-{ms.id:04d}",
-                )
-                created_count += 1
-            else:
-                if fs.fee_class != target_fee_class:
-                    fs.fee_class = target_fee_class
-                    fs.save(update_fields=["fee_class"])
-                    updated_count += 1
-
-        return {
-            "success": True,
-            "created": created_count,
-            "updated": updated_count,
-            "total_fee_students": FeeStudent.objects.count()
-        }
-    except Exception as e:
-        import logging
-        logging.getLogger("school_whatsapp").error(f"[sync_roster] Error: {e}")
-        return {"success": False, "error": str(e)}
-
-
 def get_student_due_balance(student_id, academic_year="2026-2027"):
     """
     Dynamically computes live student outstanding balance till current date.

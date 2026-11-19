@@ -1,3 +1,6 @@
+import io
+import csv
+import openpyxl
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -22,8 +25,7 @@ from .services import (
     verify_counter_payment_otp_and_commit,
     record_offline_direct_payment,
     post_journal_entry,
-    get_or_create_student_receivable_account,
-    sync_roster_from_school_students
+    get_or_create_student_receivable_account
 )
 from api.services.whatsapp_service import whatsapp_service
 from api.utils.logger import logger
@@ -95,18 +97,9 @@ class ManagementFeeStudentsView(APIView):
     Management API: List or create FeeStudents (Isolated from marketing students).
     """
     def get(self, request):
-        if FeeStudent.objects.count() == 0:
-            sync_roster_from_school_students()
-
         class_id = request.query_params.get("class_id")
         search = request.query_params.get("search")
         academic_year = request.query_params.get("academic_year", "2026-2027")
-
-        if not FeeStudent.objects.exists():
-            try:
-                sync_roster_from_school_students()
-            except Exception as e:
-                logger.error(f"[Auto Sync Roster Error] {e}")
 
         qs = FeeStudent.objects.select_related("fee_class").order_by("student_name")
         if class_id:
@@ -169,16 +162,246 @@ class ManagementFeeStudentsView(APIView):
         get_or_create_student_receivable_account(st)
         return Response(FeeStudentSerializer(st).data, status=status.HTTP_201_CREATED)
 
+    def delete(self, request):
+        student_id = request.query_params.get("id") or request.data.get("id")
+        student_ids = request.data.get("student_ids") or ([student_id] if student_id else [])
+        if not student_ids:
+            return Response({"error": "student_id or student_ids required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        students = FeeStudent.objects.filter(id__in=student_ids)
+        with transaction.atomic():
+            FeePaymentSession.objects.filter(student__in=students).delete()
+            JournalItem.objects.filter(student__in=students).delete()
+            Account.objects.filter(student__in=students).delete()
+            deleted_count = students.delete()[0]
+        
+        return Response({
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"Successfully deleted {deleted_count} fee student(s)."
+        })
 
-class ManagementFeeStudentsSyncRosterView(APIView):
+
+def _normalize_raw_student_record(raw):
+    def get_val(keys):
+        for k in keys:
+            if k in raw and raw[k] is not None:
+                v = str(raw[k]).strip()
+                if v and v.lower() != "none" and v.lower() != "nan":
+                    return v
+        return ""
+
+    student_name = get_val(["student_name", "student", "name", "studentname", "full_name"])
+    parent_name = get_val(["parent_name", "parent", "father_name", "father", "guardian_name", "guardian"])
+    cls_val = get_val(["class", "class_name", "grade", "standard", "class_sec"])
+    sec_val = get_val(["section", "sec"])
+    phone_val = get_val(["phone", "whatsapp_number", "whatsapp", "phone_number", "mobile", "contact"])
+    admission_number = get_val(["admission_number", "adm_no", "admission_no", "adm", "admission"])
+
+    if cls_val and cls_val.endswith(".0"):
+        cls_val = cls_val[:-2]
+
+    if cls_val and not sec_val:
+        for sep in ["-", " ", "/"]:
+            if sep in cls_val:
+                parts = cls_val.split(sep, 1)
+                if len(parts) == 2 and len(parts[1].strip()) <= 2:
+                    cls_val = parts[0].strip()
+                    sec_val = parts[1].strip()
+                    break
+
+    if not sec_val:
+        sec_val = "A"
+    sec_val = sec_val.upper()
+
+    if phone_val:
+        if phone_val.endswith(".0"):
+            phone_val = phone_val[:-2]
+        clean_phone = "".join(ch for ch in phone_val if ch.isdigit())
+        if len(clean_phone) == 10 and not clean_phone.startswith("91"):
+            clean_phone = "91" + clean_phone
+    else:
+        clean_phone = ""
+
+    return {
+        "student_name": student_name,
+        "parent_name": parent_name,
+        "class_name": cls_val or "General",
+        "section": sec_val,
+        "phone": clean_phone,
+        "admission_number": admission_number
+    }
+
+
+class ManagementFeeStudentImportView(APIView):
     """
-    Management API: Copies school roster into isolated FeeStudents without touching marketing students.
+    Management API: Bulk import FeeStudents from Excel (.xlsx, .xls) or CSV.
+    100% isolated from marketing students.
+    Auto-creates/links FeeClass and individual sub-ledger Account (1100-{id}) in COA.
     """
     def post(self, request):
-        res = sync_roster_from_school_students()
+        records = []
+        uploaded_file = request.FILES.get("file")
+
+        if uploaded_file:
+            filename = uploaded_file.name.lower()
+            if filename.endswith(".xlsx") or filename.endswith(".xls"):
+                try:
+                    wb = openpyxl.load_workbook(uploaded_file, data_only=True)
+                    sheet = wb.active
+                    rows = list(sheet.iter_rows(values_only=True))
+                    if rows:
+                        headers = [str(c).strip().lower().replace(" ", "_") if c is not None else "" for c in rows[0]]
+                        for row in rows[1:]:
+                            if not any(row):
+                                continue
+                            row_dict = {}
+                            for idx, val in enumerate(row):
+                                if idx < len(headers) and headers[idx]:
+                                    row_dict[headers[idx]] = val
+                            records.append(row_dict)
+                except Exception as e:
+                    return Response({"error": f"Failed to parse Excel file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                # CSV
+                try:
+                    content = uploaded_file.read()
+                    for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+                        try:
+                            text = content.decode(enc)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    else:
+                        text = content.decode("utf-8", errors="ignore")
+
+                    reader = csv.DictReader(io.StringIO(text))
+                    for row in reader:
+                        if not any(row.values()):
+                            continue
+                        clean_row = {
+                            k.strip().lower().replace(" ", "_"): v
+                            for k, v in row.items() if k
+                        }
+                        records.append(clean_row)
+                except Exception as e:
+                    return Response({"error": f"Failed to parse CSV file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        elif "students" in request.data:
+            records = request.data.get("students", [])
+        else:
+            return Response({"error": "No file or student records provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not records:
+            return Response({"error": "No student rows found in the uploaded data."}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_count = 0
+        updated_count = 0
+        classes_created = 0
+
+        with transaction.atomic():
+            for raw in records:
+                parsed = _normalize_raw_student_record(raw)
+                s_name = parsed["student_name"]
+                if not s_name:
+                    continue
+
+                c_name = parsed["class_name"]
+                sec = parsed["section"]
+                phone = parsed["phone"]
+                p_name = parsed["parent_name"]
+                adm_no = parsed["admission_number"]
+
+                fee_cls, cls_created = FeeClass.objects.get_or_create(
+                    name=c_name,
+                    section=sec,
+                    defaults={"is_active": True}
+                )
+                if cls_created:
+                    classes_created += 1
+
+                # Match existing student in this class or by phone
+                st = FeeStudent.objects.filter(student_name__iexact=s_name, fee_class=fee_cls).first()
+                if not st and phone:
+                    st = FeeStudent.objects.filter(student_name__iexact=s_name, whatsapp_number=phone).first()
+
+                if st:
+                    if p_name:
+                        st.parent_name = p_name
+                    if phone:
+                        st.whatsapp_number = phone
+                    st.fee_class = fee_cls
+                    if adm_no:
+                        st.admission_number = adm_no
+                    st.save()
+                    updated_count += 1
+                else:
+                    st = FeeStudent.objects.create(
+                        student_name=s_name,
+                        parent_name=p_name,
+                        whatsapp_number=phone,
+                        fee_class=fee_cls,
+                        admission_number=adm_no
+                    )
+                    created_count += 1
+
+                # Sub-ledger account in COA under 1100-{st.id}
+                get_or_create_student_receivable_account(st)
+
         return Response({
-            "message": "School students roster synchronized into Fee Accounts successfully!",
-            "details": res
+            "success": True,
+            "created_count": created_count,
+            "updated_count": updated_count,
+            "total_processed": created_count + updated_count,
+            "classes_created": classes_created,
+            "message": f"Successfully processed {created_count + updated_count} student(s) ({created_count} added, {updated_count} updated)."
+        }, status=status.HTTP_200_OK)
+
+
+class ManagementFeeStudentDetailView(APIView):
+    """
+    Management API: Retrieve or delete an individual FeeStudent.
+    Cascades safely to related fee accounts and payments, with zero impact on marketing students.
+    """
+    def delete(self, request, pk):
+        try:
+            student = FeeStudent.objects.get(pk=pk)
+        except FeeStudent.DoesNotExist:
+            return Response({"error": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        with transaction.atomic():
+            FeePaymentSession.objects.filter(student=student).delete()
+            JournalItem.objects.filter(student=student).delete()
+            Account.objects.filter(student=student).delete()
+            student.delete()
+
+        return Response({"success": True, "message": "Fee student deleted successfully."})
+
+
+class ManagementFeeStudentBulkDeleteView(APIView):
+    """
+    Management API: Bulk delete FeeStudents.
+    Cleans up associated COA sub-ledger accounts without touching WhatsApp broadcasting.
+    """
+    def post(self, request):
+        student_ids = request.data.get("student_ids", [])
+        if not student_ids or not isinstance(student_ids, list):
+            return Response({"error": "student_ids list is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        students = FeeStudent.objects.filter(id__in=student_ids)
+        count = students.count()
+        if count == 0:
+            return Response({"success": True, "deleted_count": 0, "message": "No matching students found."})
+
+        with transaction.atomic():
+            FeePaymentSession.objects.filter(student__in=students).delete()
+            JournalItem.objects.filter(student__in=students).delete()
+            Account.objects.filter(student__in=students).delete()
+            deleted_count = students.delete()[0]
+
+        return Response({
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"Successfully deleted {deleted_count} student(s) and removed their COA sub-ledgers."
         })
 
 

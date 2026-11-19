@@ -599,11 +599,38 @@ export const api = {
     return handleResponse(res);
   },
 
-  async syncFeeStudentsRoster() {
-    const res = await fetch(`${API_BASE}/api/fees/management/students/sync-roster`, {
+  async importFeeStudents(fileOrFormData) {
+    let body;
+    let headers = {};
+    if (fileOrFormData instanceof FormData) {
+      body = fileOrFormData;
+    } else if (fileOrFormData instanceof File) {
+      body = new FormData();
+      body.append('file', fileOrFormData);
+    } else {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify(fileOrFormData);
+    }
+    const res = await fetch(`${API_BASE}/api/fees/management/students/import`, {
+      method: 'POST',
+      headers,
+      body,
+    });
+    return handleResponse(res);
+  },
+
+  async deleteFeeStudent(studentId) {
+    const res = await fetch(`${API_BASE}/api/fees/management/students/${studentId}`, {
+      method: 'DELETE',
+    });
+    return handleResponse(res);
+  },
+
+  async bulkDeleteFeeStudents(studentIds) {
+    const res = await fetch(`${API_BASE}/api/fees/management/students/bulk-delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ student_ids: studentIds }),
     });
     return handleResponse(res);
   },

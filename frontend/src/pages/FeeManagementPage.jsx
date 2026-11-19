@@ -24,9 +24,15 @@ import {
   RotateCcw,
   FileText,
   UserPlus,
+  Upload,
+  Download,
+  FileSpreadsheet,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { sortClassesAscending } from '../utils/classSort';
+import { ACADEMIC_YEARS } from '../utils/academicYears';
 
 export function FeeManagementPage({ showToast }) {
   // Active Tab: 'slabs' | 'students'
@@ -63,7 +69,6 @@ export function FeeManagementPage({ showToast }) {
   const [studentClassId, setStudentClassId] = useState('');
   const [studentPage, setStudentPage] = useState(1);
   const studentPageSize = 25;
-  const [syncingRoster, setSyncingRoster] = useState(false);
 
   // Add Fee Student Modal State
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
@@ -78,6 +83,16 @@ export function FeeManagementPage({ showToast }) {
   const [selectedStudentPassbook, setSelectedStudentPassbook] = useState(null);
   const [studentPassbookData, setStudentPassbookData] = useState(null);
   const [loadingStudentPassbook, setLoadingStudentPassbook] = useState(false);
+
+  // Multi-select & Delete State
+  const [selectedStudentIds, setSelectedStudentIds] = useState([]);
+  const [deletingStudents, setDeletingStudents] = useState(false);
+
+  // Import Fee Students Modal State
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   const loadFeeStudents = async () => {
     setLoadingStudents(true);
@@ -96,27 +111,6 @@ export function FeeManagementPage({ showToast }) {
     loadData();
     loadFeeStudents();
   }, [academicYear]);
-
-  const handleSyncRoster = async () => {
-    setSyncingRoster(true);
-    try {
-      const res = await api.syncFeeStudentsRoster();
-      showToast?.({
-        type: 'success',
-        title: 'Roster Synchronized',
-        message: res.message || 'Fee student roster synchronized successfully.',
-      });
-      loadFeeStudents();
-    } catch (err) {
-      showToast?.({
-        type: 'error',
-        title: 'Sync Failed',
-        message: err.message || 'Could not synchronize roster.',
-      });
-    } finally {
-      setSyncingRoster(false);
-    }
-  };
 
   const handleViewStudentPassbook = async (student) => {
     setSelectedStudentPassbook(student);
@@ -213,6 +207,149 @@ export function FeeManagementPage({ showToast }) {
     (studentPage - 1) * studentPageSize,
     studentPage * studentPageSize
   );
+
+  const currentPageStudentIds = paginatedStudents.map((s) => s.id);
+  const allCurrentPageSelected =
+    currentPageStudentIds.length > 0 &&
+    currentPageStudentIds.every((id) => selectedStudentIds.includes(id));
+
+  const handleToggleSelectAll = () => {
+    if (allCurrentPageSelected) {
+      setSelectedStudentIds((prev) => prev.filter((id) => !currentPageStudentIds.includes(id)));
+    } else {
+      setSelectedStudentIds((prev) => Array.from(new Set([...prev, ...currentPageStudentIds])));
+    }
+  };
+
+  const handleToggleSelectStudent = (id) => {
+    setSelectedStudentIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleDeleteSingleStudent = async (student) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ${student.student_name} from Fee Management and remove their sub-ledger account in Chart of Accounts?\n\nNote: WhatsApp broadcast contacts remain completely untouched.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await api.deleteFeeStudent(student.id);
+      showToast?.({
+        type: 'success',
+        title: 'Student Deleted',
+        message: `${student.student_name} removed from fee roster and ledger.`
+      });
+      setSelectedStudentIds((prev) => prev.filter((id) => id !== student.id));
+      await loadFeeStudents();
+      await loadData();
+    } catch (err) {
+      showToast?.({
+        type: 'error',
+        title: 'Delete Failed',
+        message: err.message || 'Failed to delete fee student.'
+      });
+    }
+  };
+
+  const handleBulkDeleteStudents = async () => {
+    if (selectedStudentIds.length === 0) return;
+
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ${selectedStudentIds.length} selected student(s) from Fee Management and remove their sub-ledger accounts in Chart of Accounts?\n\nNote: WhatsApp broadcast contacts remain completely untouched.`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingStudents(true);
+    try {
+      const res = await api.bulkDeleteFeeStudents(selectedStudentIds);
+      showToast?.({
+        type: 'success',
+        title: 'Bulk Delete Complete',
+        message: res.message || `Deleted ${selectedStudentIds.length} fee student(s).`
+      });
+      setSelectedStudentIds([]);
+      await loadFeeStudents();
+      await loadData();
+    } catch (err) {
+      showToast?.({
+        type: 'error',
+        title: 'Bulk Delete Failed',
+        message: err.message || 'Failed to delete selected students.'
+      });
+    } finally {
+      setDeletingStudents(false);
+    }
+  };
+
+  const handleDownloadSampleTemplate = () => {
+    const csvContent =
+      'student_name,parent_name,class,section,phone\n' +
+      'AARNA GARG,MR. YASH GARG,1,A,9102742082830\n' +
+      'AARAV SHARMA,MR. ROHIT SHARMA,1,B,919876543210\n' +
+      'ANANYA VERMA,MRS. PRIYA VERMA,2,A,919812345678\n' +
+      'VIHAAN MEHTA,MR. RAJESH MEHTA,2,B,919823456789\n' +
+      'ISHAN GUPTA,MR. AMIT GUPTA,3,A,919834567890\n';
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'sample_fee_students.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleOpenImportModal = () => {
+    setImportFile(null);
+    setImportResult(null);
+    setShowImportModal(true);
+  };
+
+  const handleImportStudents = async (e) => {
+    e.preventDefault();
+    if (!importFile) {
+      showToast?.({
+        type: 'error',
+        title: 'File Required',
+        message: 'Please choose an Excel (.xlsx, .xls) or CSV file to import.'
+      });
+      return;
+    }
+
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile);
+      const res = await api.importFeeStudents(formData);
+      setImportResult(res);
+      showToast?.({
+        type: 'success',
+        title: 'Import Successful',
+        message: res.message || 'Successfully processed student roster.'
+      });
+      await loadFeeStudents();
+      await loadData();
+      if (api.clearFeeClassesCache) api.clearFeeClassesCache();
+    } catch (err) {
+      showToast?.({
+        type: 'error',
+        title: 'Import Failed',
+        message: err.message || 'Could not import student file.'
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -379,22 +516,19 @@ export function FeeManagementPage({ showToast }) {
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                onClick={handleOpenImportModal}
+                className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Import Students</span>
+              </button>
+              <button
+                type="button"
                 onClick={handleOpenAddStudentModal}
                 className="px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
               >
                 <UserPlus className="w-4 h-4" />
                 <span>Add Fee Student</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSyncRoster}
-                disabled={syncingRoster}
-                className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                title="Synchronize Fee Student roster from registered school students"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${syncingRoster ? 'animate-spin' : ''}`} />
-                <span>{syncingRoster ? 'Syncing...' : 'Sync Roster'}</span>
               </button>
             </div>
           )}
@@ -406,8 +540,11 @@ export function FeeManagementPage({ showToast }) {
               onChange={(e) => setAcademicYear(e.target.value)}
               className="bg-transparent font-bold text-slate-800 outline-hidden cursor-pointer"
             >
-              <option value="2026-2027">2026-2027</option>
-              <option value="2027-2028">2027-2028</option>
+              {ACADEMIC_YEARS.map((yr) => (
+                <option key={yr} value={yr}>
+                  {yr}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -734,9 +871,34 @@ export function FeeManagementPage({ showToast }) {
             </div>
 
             <div className="flex items-center gap-2 justify-end">
+              {selectedStudentIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleBulkDeleteStudents}
+                  disabled={deletingStudents}
+                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer flex items-center gap-1.5 animate-in fade-in duration-150"
+                >
+                  {deletingStudents ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5" />
+                  )}
+                  <span>Delete Selected ({selectedStudentIds.length})</span>
+                </button>
+              )}
+
               <span className="text-xs text-slate-500 font-semibold mr-1">
                 Found <span className="font-bold text-slate-900">{filteredFeeStudents.length}</span> students
               </span>
+
+              <button
+                type="button"
+                onClick={handleOpenImportModal}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Import Students</span>
+              </button>
 
               <button
                 type="button"
@@ -745,17 +907,6 @@ export function FeeManagementPage({ showToast }) {
               >
                 <UserPlus className="w-3.5 h-3.5" />
                 <span>Add Student</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSyncRoster}
-                disabled={syncingRoster}
-                className="px-3.5 py-2 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                title="Synchronize Fee Student roster from registered school students"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 text-teal-600 ${syncingRoster ? 'animate-spin' : ''}`} />
-                <span>{syncingRoster ? 'Syncing...' : 'Sync Roster'}</span>
               </button>
             </div>
           </div>
@@ -773,25 +924,24 @@ export function FeeManagementPage({ showToast }) {
               <p className="text-xs text-slate-500 max-w-sm mx-auto">
                 {studentSearch || studentClassId
                   ? 'No students matched the active search or class filter.'
-                  : 'No fee students exist in the ledger roster. Click "Add Fee Student" or "Sync Roster" to get started.'}
+                  : 'No fee students exist in the ledger roster. Click "Import Students" to upload an Excel/CSV file or "Add Fee Student" to create manually.'}
               </p>
               <div className="flex items-center justify-center gap-2">
                 <button
                   type="button"
-                  onClick={handleOpenAddStudentModal}
-                  className="px-4 py-2 bg-teal-600 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                  onClick={handleOpenImportModal}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  <UserPlus className="w-4 h-4" />
-                  <span>Add First Fee Student</span>
+                  <Upload className="w-4 h-4" />
+                  <span>Import Students (Excel/CSV)</span>
                 </button>
                 <button
                   type="button"
-                  onClick={handleSyncRoster}
-                  disabled={syncingRoster}
-                  className="px-4 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                  onClick={handleOpenAddStudentModal}
+                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${syncingRoster ? 'animate-spin' : ''}`} />
-                  <span>Sync from School</span>
+                  <UserPlus className="w-4 h-4" />
+                  <span>Add First Fee Student</span>
                 </button>
               </div>
             </div>
@@ -801,18 +951,40 @@ export function FeeManagementPage({ showToast }) {
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-900 text-white font-semibold text-[11px] tracking-wide uppercase">
+                      <th className="py-3 px-3 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={allCurrentPageSelected}
+                          onChange={handleToggleSelectAll}
+                          className="rounded border-slate-400 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                          title="Select / Deselect all on this page"
+                        />
+                      </th>
                       <th className="py-3 px-4">Sub-Ledger Code</th>
                       <th className="py-3 px-4">Student Name</th>
                       <th className="py-3 px-4">Class &amp; Section</th>
                       <th className="py-3 px-4">Parent Name</th>
                       <th className="py-3 px-4">WhatsApp Contact</th>
                       <th className="py-3 px-4 text-right">Ledger Outstanding</th>
-                      <th className="py-3 px-4 text-center w-36">Action</th>
+                      <th className="py-3 px-4 text-center w-48">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {paginatedStudents.map((st) => (
-                      <tr key={st.id} className="hover:bg-slate-50/80 transition-colors">
+                      <tr
+                        key={st.id}
+                        className={`hover:bg-slate-50/80 transition-colors ${
+                          selectedStudentIds.includes(st.id) ? 'bg-teal-50/40' : ''
+                        }`}
+                      >
+                        <td className="py-3 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedStudentIds.includes(st.id)}
+                            onChange={() => handleToggleSelectStudent(st.id)}
+                            className="rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                          />
+                        </td>
                         <td className="py-3 px-4 font-mono font-bold text-teal-800 text-[11px]">
                           1100-{st.id}
                         </td>
@@ -850,14 +1022,26 @@ export function FeeManagementPage({ showToast }) {
                           )}
                         </td>
                         <td className="py-3 px-4 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleViewStudentPassbook(st)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 transition-colors cursor-pointer"
-                          >
-                            <BookOpen className="w-3.5 h-3.5" />
-                            <span>View Passbook</span>
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleViewStudentPassbook(st)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 transition-colors cursor-pointer"
+                              title="View Student Fee Passbook"
+                            >
+                              <BookOpen className="w-3.5 h-3.5" />
+                              <span>Passbook</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSingleStudent(st)}
+                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors cursor-pointer"
+                              title="Delete Fee Student"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1490,6 +1674,157 @@ export function FeeManagementPage({ showToast }) {
                     <>
                       <UserPlus className="w-3.5 h-3.5" />
                       <span>Register Fee Student</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL: Import Fee Students (Excel / CSV) ───────────────────── */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-emerald-700 text-white">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>Import Fee Students (Excel / CSV)</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImportModal(false);
+                  setImportFile(null);
+                  setImportResult(null);
+                }}
+                className="p-1 rounded-lg hover:bg-emerald-800 text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <form onSubmit={handleImportStudents} className="p-5 space-y-4">
+              {/* Sample Template Download Box */}
+              <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <Download className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Download Sample Template</span>
+                  </span>
+                  <p className="text-[11px] text-emerald-800">
+                    Get pre-formatted spreadsheet with <code className="font-mono font-bold text-[10px]">student_name</code>, <code className="font-mono font-bold text-[10px]">parent_name</code>, <code className="font-mono font-bold text-[10px]">class</code>, <code className="font-mono font-bold text-[10px]">section</code>, <code className="font-mono font-bold text-[10px]">phone</code>.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadSampleTemplate}
+                  className="px-3 py-1.5 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold shrink-0 flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download .CSV</span>
+                </button>
+              </div>
+
+              {/* File Upload Area */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Select Excel (.xlsx, .xls) or CSV (.csv) File *
+                </label>
+                <div className="relative border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-2xl p-6 text-center bg-slate-50/50 hover:bg-emerald-50/20 transition-all cursor-pointer">
+                  <input
+                    type="file"
+                    accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        setImportFile(e.target.files[0]);
+                        setImportResult(null);
+                      }
+                    }}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  <div className="flex flex-col items-center justify-center gap-2">
+                    <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                      <Upload className="w-5 h-5" />
+                    </div>
+                    {importFile ? (
+                      <div>
+                        <p className="text-xs font-bold text-slate-800">{importFile.name}</p>
+                        <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                          {(importFile.size / 1024).toFixed(1)} KB • Ready to upload
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-xs font-bold text-slate-700">
+                          Click to browse or drag and drop your student roster
+                        </p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Supports Microsoft Excel (.xlsx, .xls) and standard CSV
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Information & Safety Specs */}
+              <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5 text-[11px] text-slate-600">
+                <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Import Rules &amp; Sync Guarantee:</span>
+                </div>
+                <ul className="list-disc list-inside space-y-0.5 text-slate-600 pl-1">
+                  <li><strong>Multiple Imports:</strong> Re-importing safely updates existing student records and appends new students.</li>
+                  <li><strong>COA Sub-Ledgers:</strong> Every imported student automatically gets a sub-ledger (<code className="font-mono bg-slate-200 px-1 rounded text-[10px]">1100-&#123;id&#125;</code>) in Chart of Accounts.</li>
+                  <li><strong>Classes Auto-Mapped:</strong> Missing fee classes and sections (e.g. 1-A, 2-B) are auto-created and linked to fee slabs.</li>
+                  <li><strong>WhatsApp Broadcasts Safe:</strong> Isolated strictly to the accounting engine. Marketing campaign contacts are never touched.</li>
+                </ul>
+              </div>
+
+              {/* Result Summary */}
+              {importResult && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 space-y-1">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span>Import Completed Successfully</span>
+                  </p>
+                  <p className="text-[11px] text-emerald-800">
+                    Added <span className="font-bold">{importResult.created_count || 0}</span> new students, updated <span className="font-bold">{importResult.updated_count || 0}</span> existing students, and registered <span className="font-bold">{importResult.classes_created || 0}</span> class sections.
+                  </p>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowImportModal(false);
+                    setImportFile(null);
+                    setImportResult(null);
+                  }}
+                  className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={importing || !importFile}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  {importing ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Importing Roster...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload &amp; Import</span>
                     </>
                   )}
                 </button>

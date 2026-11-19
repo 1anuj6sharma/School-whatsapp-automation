@@ -27,6 +27,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { api } from '../services/api';
+import { ACADEMIC_YEARS } from '../utils/academicYears';
 
 // Module-level in-memory cache for Stale-While-Revalidate (persists across navigation)
 const coaMemoryCache = {
@@ -372,8 +373,11 @@ export const AccountsPage = ({ showToast }) => {
               onChange={(e) => setAcademicYear(e.target.value)}
               className="bg-transparent font-bold text-slate-800 border-none outline-hidden cursor-pointer"
             >
-              <option value="2026-2027">2026-2027</option>
-              <option value="2027-2028">2027-2028</option>
+              {ACADEMIC_YEARS.map((yr) => (
+                <option key={yr} value={yr}>
+                  {yr}
+                </option>
+              ))}
             </select>
           </div>
 
